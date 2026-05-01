@@ -62,11 +62,19 @@ export function extractBearerFromRequest(req: PWRequest): CapturedTokenInfo | nu
   };
 }
 
+interface InspectedBearer {
+  shortLine: string;       // brief line for stderr
+  jsonLine: string;        // structured JSON line for trace file
+  audience: string;        // decoded aud claim
+  hostPath: string;        // host + path for dedup
+}
+
 /**
  * Inspect ALL Bearer-bearing requests (regardless of audience) for diagnostic logging.
- * Returns a brief summary string the caller can write to stderr.
+ * Returns the brief stderr line + structured JSON line for the trace file, or null
+ * if the request has no Bearer.
  */
-function inspectBearerForLog(req: PWRequest): string | null {
+function inspectBearerForLog(req: PWRequest): InspectedBearer | null {
   const headers = req.headers();
   const auth = headers['authorization'] ?? headers['Authorization'];
   if (!auth || !auth.startsWith('Bearer ')) return null;
@@ -80,14 +88,41 @@ function inspectBearerForLog(req: PWRequest): string | null {
     appid = (claims.appid as string | undefined) ?? '?';
   } catch { /* ignore */ }
   let host = '?';
-  try { host = new URL(req.url()).host; } catch { /* ignore */ }
-  return `[bearer-seen] host=${host} aud=${aud} appid=${appid}`;
+  let path = '?';
+  let url = req.url();
+  try {
+    const u = new URL(url);
+    host = u.host;
+    path = u.pathname + (u.search ? '?' + u.search.slice(1).split('&').slice(0, 3).join('&') : '');
+  } catch { /* ignore */ }
+  const method = req.method();
+  const hostPath = `${method} ${host}${path}`;
+  return {
+    shortLine: `[bearer-seen] ${method} ${host}${path.length > 80 ? path.slice(0, 80) + '…' : path} aud=${aud}`,
+    jsonLine: JSON.stringify({ ts: new Date().toISOString(), method, host, path, aud, appid }),
+    audience: aud,
+    hostPath,
+  };
 }
 
 export async function captureSession(opts: CaptureOptions): Promise<Session> {
   let context: BrowserContext | undefined;
   // Track distinct audiences seen so we can give a useful diagnostic on timeout.
   const audiencesSeen = new Map<string, number>();
+  // Dedup stderr lines by (method+host+path+audience) so output stays readable
+  // even when Teams web bursts hundreds of identical-shape requests.
+  const seenHostPathAud = new Set<string>();
+
+  // Open the trace file. Each Bearer-bearing request appends one JSON line.
+  // Path is fixed under ~/.teams-cli/ so subsequent debug runs can grep it.
+  const { writeFileSync, appendFileSync, mkdirSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { homedir } = await import('node:os');
+  const traceDir = join(process.env.HOME ?? homedir(), '.teams-cli');
+  try { mkdirSync(traceDir, { recursive: true, mode: 0o700 }); } catch { /* ignore */ }
+  const tracePath = join(traceDir, 'login-trace.jsonl');
+  // Truncate any prior trace.
+  try { writeFileSync(tracePath, ''); } catch { /* ignore */ }
 
   try {
     context = await chromium.launchPersistentContext(opts.profileDir ?? '', {
@@ -116,13 +151,16 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
         // Diagnostic log for every Bearer (regardless of audience).
         const log = inspectBearerForLog(req);
         if (log) {
-          process.stderr.write(log + '\n');
-          // Track audience histogram for the timeout summary.
-          const audMatch = log.match(/aud=([^\s]+)/);
-          if (audMatch) {
-            const aud = audMatch[1];
-            audiencesSeen.set(aud, (audiencesSeen.get(aud) ?? 0) + 1);
+          // Always append the structured line to the trace file (no dedup there).
+          try { appendFileSync(tracePath, log.jsonLine + '\n'); } catch { /* ignore */ }
+          // Dedup the stderr line: only print first occurrence of each unique
+          // (method+host+path+audience) tuple so the user can read it.
+          const dedupKey = `${log.hostPath} aud=${log.audience}`;
+          if (!seenHostPathAud.has(dedupKey)) {
+            seenHostPathAud.add(dedupKey);
+            process.stderr.write(log.shortLine + '\n');
           }
+          audiencesSeen.set(log.audience, (audiencesSeen.get(log.audience) ?? 0) + 1);
         }
         // Selective accept: only Graph-audience tokens.
         const info = extractBearerFromRequest(req);
@@ -138,9 +176,15 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
     await page.goto(TEAMS_ROOT);
     process.stderr.write(`[teams-cli login] navigated to ${TEAMS_ROOT}\n`);
     process.stderr.write(`[teams-cli login] waiting for a Graph-audience Bearer (timeout ${opts.loginTimeoutMs}ms)\n`);
-    process.stderr.write(`[teams-cli login] HINT: click around in Teams (open a chat, view a profile, open the calendar tab) to provoke Graph calls.\n`);
+    process.stderr.write(`[teams-cli login] full request trace: ${tracePath}\n`);
+    process.stderr.write(`[teams-cli login] HINT: open a chat AND scroll its history. That triggers the chat-list and chat-message endpoints we want to discover.\n`);
 
     const info = await captured;
+    process.stderr.write(`[teams-cli login] trace summary (unique audience × method+host+path tuples):\n`);
+    for (const k of Array.from(seenHostPathAud).sort()) {
+      process.stderr.write(`  ${k}\n`);
+    }
+    process.stderr.write(`[teams-cli login] full trace at ${tracePath} — ${Array.from(seenHostPathAud).length} unique tuples / ${Array.from(audiencesSeen.values()).reduce((a, b) => a + b, 0)} total Bearer requests\n`);
 
     const pwCookies = await context.cookies();
     const cookies: SessionCookie[] = pwCookies.map(c => ({
