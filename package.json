@@ -1,0 +1,30 @@
+{
+  "name": "teams-cli",
+  "version": "0.1.0",
+  "description": "TypeScript CLI for Microsoft Teams via captured Outlook-web Bearer token. Mirrors outlook-cli.",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/cli.js",
+  "bin": {
+    "teams-cli": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc && chmod +x dist/cli.js",
+    "cli": "ts-node src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "commander": "^14.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "playwright": "^1.59.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
