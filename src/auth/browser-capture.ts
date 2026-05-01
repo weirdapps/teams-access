@@ -36,14 +36,15 @@ export interface CapturedTokenInfo {
 }
 
 /**
- * Pure function: given a Playwright Request, decide if it carries a Graph-bound Bearer.
+ * Pure function: given a Playwright Request, decide if it carries an acceptable Bearer.
  *
- * We accept ONLY tokens whose `aud` claim resolves to Microsoft Graph (commercial,
- * GovCloud, or China cloud), or whose `aud` is the Graph well-known appid GUID.
- * Tokens for other audiences (api.spaces.skype.com, chatsvc.teams.microsoft.com,
- * outlook.office.com etc.) are returned as null even though Teams web requests
- * them — only Graph tokens work against the public Graph REST surface this CLI
- * targets.
+ * Path B: we accept ANY audience-bound Bearer because the multi-token Session
+ * stores all of them keyed by aud. The "primary" bearerToken on Session is
+ * just whichever one we happened to capture first — it's a backward-compat
+ * shim, no longer the only credential.
+ *
+ * Returns null only if the request has no Bearer at all OR the Bearer doesn't
+ * decode as a 3-segment JWT.
  */
 export function extractBearerFromRequest(req: PWRequest): CapturedTokenInfo | null {
   const headers = req.headers();
@@ -58,8 +59,6 @@ export function extractBearerFromRequest(req: PWRequest): CapturedTokenInfo | nu
     return null;
   }
   const aud = typeof claims.aud === 'string' ? claims.aud : undefined;
-  const isGraphAud = aud != null && (aud === GRAPH_APPID || GRAPH_AUD_RE.test(aud));
-  if (!isGraphAud) return null;
   return {
     bearerToken: token,
     upn: claims.upn ?? claims.unique_name ?? undefined,
@@ -69,6 +68,11 @@ export function extractBearerFromRequest(req: PWRequest): CapturedTokenInfo | nu
     appid: claims.appid as string | undefined,
     scp: claims.scp as string | undefined,
   };
+}
+
+/** True if the audience claim resolves to Microsoft Graph. */
+export function isGraphAudience(aud: string | undefined): boolean {
+  return aud != null && (aud === GRAPH_APPID || GRAPH_AUD_RE.test(aud));
 }
 
 interface InspectedBearer {
@@ -127,6 +131,7 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
   // audience. This is the seed of Path B's multi-token session model.
   interface CapturedToken { token: string; aud: string; appid?: string; scp?: string; exp?: number; capturedAt: string }
   const tokensByAud = new Map<string, CapturedToken>();
+  let primaryResolved = false;
 
   // Open the trace file. Each Bearer-bearing request appends one JSON line.
   // Path is fixed under ~/.teams-cli/ so subsequent debug runs can grep it.
@@ -147,6 +152,10 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       viewport: null,
     });
 
+    // Capture strategy (Path B): grab the FIRST Bearer of any audience and resolve.
+    // The diagnostic window collects more audiences after that; the multi-token
+    // session is built from everything seen. We no longer require a Graph token
+    // to be the "primary" — it's just one of N tokens in session.tokens.
     const captured = new Promise<CapturedTokenInfo>((resolve, reject) => {
       const timer = setTimeout(() => {
         const summary = Array.from(audiencesSeen.entries())
@@ -155,10 +164,9 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
         reject(new ExitWithCode(ExitCode.AuthRequired, {
           code: 'auth_required',
           message:
-            `Login window timed out after ${opts.loginTimeoutMs}ms with no Graph-audience Bearer captured. ` +
+            `Login window timed out after ${opts.loginTimeoutMs}ms with no Bearer captured. ` +
             `Distinct audiences seen during the wait:\n${summary || '  (none)'}\n` +
-            `If 'https://graph.microsoft.com' is not in this list, Teams web on your tenant did not request a Graph token. ` +
-            `Try: open a chat, view someone's profile (presence triggers Graph), or open the calendar tab.`,
+            `If you see no audiences, the page hasn't loaded yet — increase --login-timeout.`,
           audiencesSeen: Object.fromEntries(audiencesSeen.entries()),
         }));
       }, opts.loginTimeoutMs);
@@ -224,12 +232,30 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
             }
           }
         }
-        // Selective accept: only Graph-audience tokens.
+        // Path B accept: take the FIRST Bearer of any audience, prefer Graph
+        // if it shows up early. Once resolved, additional Bearers continue to
+        // be collected into tokensByAud (above) for the diagnostic window.
         const info = extractBearerFromRequest(req);
-        if (info) {
-          process.stderr.write(`[accepted] aud=${info.aud} appid=${info.appid} scp=${info.scp ?? '(none)'}\n`);
-          clearTimeout(timer);
-          resolve(info);
+        if (info && !primaryResolved) {
+          // If the first-seen token isn't Graph but Graph is already in
+          // tokensByAud (rare but possible due to async), prefer Graph.
+          const graphAud = Array.from(tokensByAud.keys()).find(isGraphAudience);
+          if (graphAud) {
+            const t = tokensByAud.get(graphAud)!;
+            process.stderr.write(`[accepted] aud=${graphAud} (preferred Graph over ${info.aud}) scp=${t.scp ?? '(none)'}\n`);
+            primaryResolved = true;
+            clearTimeout(timer);
+            resolve({
+              bearerToken: t.token,
+              upn: info.upn, oid: info.oid, tid: info.tid,
+              aud: graphAud, appid: t.appid, scp: t.scp,
+            });
+          } else {
+            process.stderr.write(`[accepted] aud=${info.aud} appid=${info.appid} scp=${info.scp ?? '(none)'}\n`);
+            primaryResolved = true;
+            clearTimeout(timer);
+            resolve(info);
+          }
         }
       });
     });

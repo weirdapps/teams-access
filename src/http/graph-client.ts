@@ -2,6 +2,20 @@
 import type { Session } from '../session/store';
 import { AuthRequiredError, GraphHttpError, UpstreamError } from './errors';
 
+const GRAPH_AUDIENCE = 'https://graph.microsoft.com';
+
+/**
+ * Pick the right Bearer for Graph from a Session: prefer a multi-audience
+ * token under tokens['https://graph.microsoft.com'] (Path B), fall back
+ * to the legacy session.bearerToken for backward compat with single-token
+ * sessions / older tests.
+ */
+function graphBearer(session: Session): string {
+  const t = session.tokens?.[GRAPH_AUDIENCE];
+  if (t?.bearerToken) return t.bearerToken;
+  return session.bearerToken;
+}
+
 const DEFAULT_BASE = 'https://graph.microsoft.com/v1.0';
 
 export interface GraphClientOptions {
@@ -68,7 +82,7 @@ export class GraphClient {
     const init: RequestInit = {
       method,
       headers: {
-        Authorization: `Bearer ${this.session.bearerToken}`,
+        Authorization: `Bearer ${graphBearer(this.session)}`,
         Accept: 'application/json',
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
