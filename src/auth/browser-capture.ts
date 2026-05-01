@@ -204,6 +204,23 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
                 exp,
                 capturedAt: new Date().toISOString(),
               });
+              // Persist the multi-tokens file IMMEDIATELY so even a timed-out
+              // login leaves us with whatever tokens were collected. Atomic
+              // write via temp+rename to avoid torn reads.
+              try {
+                const payload: Record<string, { token: string; appid?: string; scp?: string; exp?: number; capturedAt: string }> = {};
+                for (const [aud, t] of tokensByAud.entries()) {
+                  payload[aud] = { token: t.token, appid: t.appid, scp: t.scp, exp: t.exp, capturedAt: t.capturedAt };
+                }
+                const tmpPath = `${multiTokensPath}.tmp`;
+                writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
+                chmodSync(tmpPath, 0o600);
+                const { renameSync } = require('node:fs');
+                renameSync(tmpPath, multiTokensPath);
+                process.stderr.write(`[multi-tokens] +${log.audience} (now have ${tokensByAud.size} audiences)\n`);
+              } catch (e) {
+                process.stderr.write(`[multi-tokens] WARN write failed: ${(e as Error).message}\n`);
+              }
             }
           }
         }
