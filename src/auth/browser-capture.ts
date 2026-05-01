@@ -121,15 +121,22 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
   // Dedup stderr lines by (method+host+path+audience) so output stays readable
   // even when Teams web bursts hundreds of identical-shape requests.
   const seenHostPathAud = new Set<string>();
+  // Path B foundation: collect the FIRST Bearer seen for each distinct audience.
+  // Written to ~/.teams-cli/multi-tokens.json (mode 0600) so we can probe the
+  // discovered Skype/IC3/chatsvcagg/etc endpoints with the right token per
+  // audience. This is the seed of Path B's multi-token session model.
+  interface CapturedToken { token: string; aud: string; appid?: string; scp?: string; exp?: number; capturedAt: string }
+  const tokensByAud = new Map<string, CapturedToken>();
 
   // Open the trace file. Each Bearer-bearing request appends one JSON line.
   // Path is fixed under ~/.teams-cli/ so subsequent debug runs can grep it.
-  const { writeFileSync, appendFileSync, mkdirSync } = await import('node:fs');
+  const { writeFileSync, appendFileSync, mkdirSync, chmodSync } = await import('node:fs');
   const { join } = await import('node:path');
   const { homedir } = await import('node:os');
   const traceDir = join(process.env.HOME ?? homedir(), '.teams-cli');
   try { mkdirSync(traceDir, { recursive: true, mode: 0o700 }); } catch { /* ignore */ }
   const tracePath = join(traceDir, 'login-trace.jsonl');
+  const multiTokensPath = join(traceDir, 'multi-tokens.json');
   // Truncate any prior trace.
   try { writeFileSync(tracePath, ''); } catch { /* ignore */ }
 
@@ -170,6 +177,35 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
             process.stderr.write(log.shortLine + '\n');
           }
           audiencesSeen.set(log.audience, (audiencesSeen.get(log.audience) ?? 0) + 1);
+
+          // Multi-audience token capture: keep the FIRST Bearer for each new
+          // audience. Later runs of the same Teams session may issue refreshed
+          // tokens with the same audience; keeping the first is fine because
+          // they all share the same scope and lifetime profile.
+          if (log.audience && log.audience !== '?' && !tokensByAud.has(log.audience)) {
+            const headers = req.headers();
+            const auth = headers['authorization'] ?? headers['Authorization'];
+            if (auth && auth.startsWith('Bearer ')) {
+              const tok = auth.slice(7).trim();
+              let exp: number | undefined;
+              let scp: string | undefined;
+              let appid: string | undefined;
+              try {
+                const c = decodeJwt(tok);
+                exp = typeof c.exp === 'number' ? c.exp : undefined;
+                scp = typeof c.scp === 'string' ? c.scp : undefined;
+                appid = typeof c.appid === 'string' ? c.appid : undefined;
+              } catch { /* ignore */ }
+              tokensByAud.set(log.audience, {
+                token: tok,
+                aud: log.audience,
+                appid,
+                scp,
+                exp,
+                capturedAt: new Date().toISOString(),
+              });
+            }
+          }
         }
         // Selective accept: only Graph-audience tokens.
         const info = extractBearerFromRequest(req);
@@ -205,6 +241,21 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       process.stderr.write(`  ${k}\n`);
     }
     process.stderr.write(`[teams-cli login] full trace at ${tracePath} — ${Array.from(seenHostPathAud).length} unique tuples / ${Array.from(audiencesSeen.values()).reduce((a, b) => a + b, 0)} total Bearer requests\n`);
+
+    // Write the multi-audience token map for Path B probing / future use.
+    if (tokensByAud.size > 0) {
+      const payload: Record<string, { token: string; appid?: string; scp?: string; exp?: number; capturedAt: string }> = {};
+      for (const [aud, t] of tokensByAud.entries()) {
+        payload[aud] = { token: t.token, appid: t.appid, scp: t.scp, exp: t.exp, capturedAt: t.capturedAt };
+      }
+      try {
+        writeFileSync(multiTokensPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
+        chmodSync(multiTokensPath, 0o600);
+        process.stderr.write(`[teams-cli login] multi-audience token map written to ${multiTokensPath} (${tokensByAud.size} audiences, mode 0600)\n`);
+      } catch (e) {
+        process.stderr.write(`[teams-cli login] WARN: could not write multi-tokens file: ${(e as Error).message}\n`);
+      }
+    }
 
     const pwCookies = await context.cookies();
     const cookies: SessionCookie[] = pwCookies.map(c => ({
