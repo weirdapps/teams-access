@@ -14,6 +14,15 @@ export interface CaptureOptions {
   loginTimeoutMs: number;
   chromeChannel: string;
   profileDir?: string;
+  /**
+   * When set (>0), after a Graph token is accepted, the browser remains open
+   * for this many additional milliseconds. This window is used purely for
+   * diagnostic capture — we keep logging every Bearer the page requests, so
+   * the trace file grows to include URLs we'd miss if we closed immediately.
+   * Defaults to 0 (close immediately on accept). Set higher to discover more
+   * (URL, audience) tuples for Path B (multi-service) architecture work.
+   */
+  diagnosticExtraMs?: number;
 }
 
 export interface CapturedTokenInfo {
@@ -180,6 +189,17 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
     process.stderr.write(`[teams-cli login] HINT: open a chat AND scroll its history. That triggers the chat-list and chat-message endpoints we want to discover.\n`);
 
     const info = await captured;
+
+    // Optional diagnostic window: keep listening (and logging) for additional
+    // ms after Graph token accept, so the user can interact with Teams (open
+    // a chat, scroll history) and we capture URL+audience tuples for the
+    // ic3 / chatsvcagg endpoints that didn't fire in the initial burst.
+    if (opts.diagnosticExtraMs && opts.diagnosticExtraMs > 0) {
+      process.stderr.write(`[teams-cli login] Graph token captured. Diagnostic window: ${opts.diagnosticExtraMs}ms (keep clicking around in Teams — open a chat, scroll history)\n`);
+      await new Promise(r => setTimeout(r, opts.diagnosticExtraMs));
+      process.stderr.write(`[teams-cli login] diagnostic window over\n`);
+    }
+
     process.stderr.write(`[teams-cli login] trace summary (unique audience × method+host+path tuples):\n`);
     for (const k of Array.from(seenHostPathAud).sort()) {
       process.stderr.write(`  ${k}\n`);

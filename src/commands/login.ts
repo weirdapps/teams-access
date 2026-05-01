@@ -5,6 +5,7 @@ import type { Config } from '../config/load';
 export interface LoginOptions {
   config: Config;
   profileDir?: string;
+  diagnosticExtraMs?: number;
 }
 
 export interface LoginResult {
@@ -17,6 +18,7 @@ export async function runLogin(opts: LoginOptions): Promise<LoginResult> {
     loginTimeoutMs: opts.config.loginTimeoutMs,
     chromeChannel: opts.config.chromeChannel,
     profileDir: opts.profileDir,
+    diagnosticExtraMs: opts.diagnosticExtraMs,
   });
   return {
     status: 'ok',

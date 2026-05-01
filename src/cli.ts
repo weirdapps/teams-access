@@ -23,7 +23,8 @@ program
 program
   .command('login')
   .description('Capture a Teams web session by signing in via Playwright Chrome window.')
-  .action(async () => {
+  .option('--diagnostic-extra-ms <ms>', 'After Graph token capture, keep browser open this long for trace diagnostics', v => Number(v))
+  .action(async (cmd) => {
     const config = loadConfig({
       timeoutMs: program.opts().timeout,
       loginTimeoutMs: program.opts().loginTimeout,
@@ -32,6 +33,7 @@ program
     const result = await runLogin({
       config,
       profileDir: join(process.env.HOME ?? homedir(), '.teams-cli', 'playwright-profile'),
+      diagnosticExtraMs: cmd.diagnosticExtraMs,
     });
     writeJson(result);
   });
