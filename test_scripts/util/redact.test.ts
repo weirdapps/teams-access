@@ -4,7 +4,9 @@ import { redactBody } from '../../src/util/redact';
 
 describe('redactBody', () => {
   it('truncates long strings to 200 chars with "…(truncated)"', () => {
-    const long = 'x'.repeat(500);
+    // Use words separated by spaces so the LONG_BLOB_RE doesn't redact the whole thing first.
+    const long = 'hello world '.repeat(50).trim();
+    expect(long.length).toBeGreaterThan(200);
     const out = redactBody(long);
     expect(out.length).toBeLessThanOrEqual(220);
     expect(out).toMatch(/…\(truncated\)$/);
