@@ -1,11 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "CommonJS",
-    "moduleResolution": "Node",
-    "lib": ["ES2022"],
-    "outDir": "dist",
-    "rootDir": "src",
+    "module": "commonjs",
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
@@ -14,7 +10,9 @@
     "skipLibCheck": true,
     "declaration": false,
     "sourceMap": true,
-    "ignoreDeprecations": "6.0"
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": ["node"]
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist", "test_scripts"]
