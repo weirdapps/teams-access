@@ -137,22 +137,9 @@ program
   .command('resolve-mri <mri>')
   .description('Resolve a Teams MRI (8:orgid:<aad-oid>) to {id, email, displayName} via Graph /users/{id}')
   .action(async (mri: string) => {
-    const opts = program.opts();
     const session = loadSessionOrThrow();
-    try {
-      const result = await runResolveMri({
-        session,
-        httpTimeoutMs: opts.timeout ?? 30000,
-        mri,
-      });
-      writeJson(result);
-    } catch (e) {
-      if (e instanceof ExitWithCode) {
-        writeJson(e.payload);
-        process.exit(e.code);
-      }
-      throw e;
-    }
+    const result = await runResolveMri({ session, ...commonConfig(), mri });
+    writeJson(result);
   });
 
 program
