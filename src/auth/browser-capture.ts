@@ -1,6 +1,6 @@
 // src/auth/browser-capture.ts
 import { chromium, type BrowserContext, type Request as PWRequest } from 'playwright';
-import { writeSession, type Session, type SessionCookie } from '../session/store';
+import { writeSession, type Session, type SessionCookie, type SessionRegion, type AudienceToken } from '../session/store';
 import { decodeJwt } from '../session/jwt';
 import { ExitCode, ExitWithCode } from '../util/exit-codes';
 
@@ -286,11 +286,49 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       sameSite: c.sameSite as 'Strict' | 'Lax' | 'None' | undefined,
     }));
 
+    // Build the multi-audience token map for the session.
+    const tokens: Record<string, AudienceToken> = {};
+    for (const [aud, t] of tokensByAud.entries()) {
+      tokens[aud] = {
+        bearerToken: t.token,
+        appid: t.appid,
+        scp: t.scp,
+        exp: t.exp,
+        capturedAt: t.capturedAt,
+      };
+    }
+    // Make sure the Graph token is always present in tokens map under the
+    // canonical audience key, even if the capture loop missed it (e.g.
+    // when the Graph host appears with a different aud-claim form).
+    if (info.aud && !tokens[info.aud]) {
+      tokens[info.aud] = {
+        bearerToken: info.bearerToken,
+        appid: info.appid,
+        scp: info.scp,
+        capturedAt: new Date().toISOString(),
+      };
+    }
+
+    // Detect tenant region from observed URL paths.
+    // Each regex picks out the region segment that appears in the URL path.
+    const region: SessionRegion = {};
+    for (const tuple of seenHostPathAud) {
+      // tuple: "<METHOD> <host><path> aud=<aud>"
+      let m: RegExpMatchArray | null;
+      if (!region.chatsvc && (m = tuple.match(/\/api\/chatsvc\/([^\/]+)\//))) region.chatsvc = m[1];
+      if (!region.csa && (m = tuple.match(/\/api\/csa\/([^\/]+)\//))) region.csa = m[1];
+      if (!region.mt && (m = tuple.match(/\/api\/mt\/part\/([^\/]+)\//))) region.mt = m[1];
+      if (!region.asyncgw && (m = tuple.match(/^\S+\s+([\w-]+)\.asyncgw\.teams\.microsoft\.com/))) region.asyncgw = m[1];
+    }
+    process.stderr.write(`[teams-cli login] detected region: ${JSON.stringify(region)}\n`);
+
     const session: Session = {
       bearerToken: info.bearerToken,
       cookies,
       capturedAt: new Date().toISOString(),
       account: { upn: info.upn, oid: info.oid, tid: info.tid },
+      tokens,
+      region,
     };
     writeSession(session);
     return session;

@@ -23,11 +23,40 @@ export interface SessionCookie {
   sameSite?: 'Strict' | 'Lax' | 'None';
 }
 
+export interface AudienceToken {
+  bearerToken: string;
+  appid?: string;
+  scp?: string;
+  exp?: number;
+  capturedAt: string;
+}
+
+export interface SessionRegion {
+  chatsvc?: string;       // e.g. "emea"
+  csa?: string;           // e.g. "emea"
+  mt?: string;            // e.g. "emea-03"
+  asyncgw?: string;       // e.g. "eu-prod"
+}
+
 export interface Session {
+  // Primary token = the Graph one. Kept top-level for backward compat with
+  // the original GraphClient + auth-check + tests written before Path B.
   bearerToken: string;
   cookies: SessionCookie[];
   capturedAt: string;
   account?: { upn?: string; oid?: string; tid?: string };
+
+  // Path B (amendment 1): per-audience Bearer tokens captured at login.
+  // Keys are the JWT 'aud' claim string. Includes the Graph audience
+  // (which duplicates bearerToken above, by design — keeps lookup uniform).
+  tokens?: Record<string, AudienceToken>;
+
+  // Tenant region detected from URL paths in the capture trace.
+  region?: SessionRegion;
+
+  // Per-team General-channel-id cache. Key: team UUID. Value: 19:...@thread.tacv2.
+  // Populated lazily by list-channels / list-messages.
+  generalChannelByTeamId?: Record<string, string>;
 }
 
 const HOME = () => process.env.HOME ?? homedir();
