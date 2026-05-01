@@ -269,6 +269,19 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
 
     const info = await captured;
 
+    // Note: we tried auto-clicking Calendar / Files tabs to provoke Graph
+    // token acquisition, but Teams web's DOM doesn't expose stable selectors
+    // for those buttons. Graph tokens get acquired only when Teams' own
+    // background sync decides to fetch SharePoint sites or calendar items.
+    // For now, surface a hint to the user if Graph token wasn't captured.
+    const hasGraph = Array.from(tokensByAud.keys()).some(isGraphAudience);
+    if (!hasGraph) {
+      process.stderr.write(`[teams-cli login] WARNING: no Graph-audience token was captured. ` +
+        `Commands that use Microsoft Graph (list-teams, list-channels, send-message, auth-check) will fail with 401. ` +
+        `To get a Graph token, click the Calendar tab or Files tab in Teams web while the diagnostic window is open.\n`);
+    }
+    process.stderr.write(`[teams-cli login] tokens captured so far: ${Array.from(tokensByAud.keys()).join(', ')}\n`);
+
     // Optional diagnostic window: keep listening (and logging) for additional
     // ms after Graph token accept, so the user can interact with Teams (open
     // a chat, scroll history) and we capture URL+audience tuples for the

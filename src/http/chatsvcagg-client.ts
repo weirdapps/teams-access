@@ -42,8 +42,8 @@ export interface DiscoverChat {
 
 export interface DiscoverChatsResponse {
   chats: DiscoverChat[];
-  continuationToken?: string;
-  raw: unknown;  // full response for debugging
+  continuationToken?: string;     // present only with discover-style pagination (deprecated)
+  raw: unknown;                    // full response for debugging or extra fields
 }
 
 export interface ChannelPost {
@@ -163,24 +163,29 @@ export class ChatsvcaggClient {
   }
 
   /**
-   * List chats via the /discover endpoint. Used as a fallback when /updates
-   * returns 500 (which it consistently does without precise Teams-web headers).
+   * List chats via the v1/updates endpoint. THE chat list endpoint Teams web uses.
    *
-   * Returns recently-active chats. Pagination via continuationToken.
+   * IMPORTANT: v3/updates returns 500 (server-side bug or undocumented header
+   * requirement); v1 and v2 work. We use v1.
+   *
+   * Returns the user's full chat list (no pagination — the response is one big
+   * object with all chats + teams + channels). Can easily be 30+ MB for an
+   * active user. Caller is responsible for filtering / sub-paging in memory.
    */
-  async listChatsViaDiscover(opts: { pageSize?: number; continuationToken?: string } = {}): Promise<DiscoverChatsResponse> {
+  async listChats(opts: { isPrefetch?: boolean } = {}): Promise<DiscoverChatsResponse> {
     const params = new URLSearchParams();
-    params.set('pageSize', String(opts.pageSize ?? 50));
-    params.set('continuationToken', opts.continuationToken ?? 'null');
-    const path = `/api/csa/${this.region}/api/v1/teams/users/me/discover?${params.toString()}`;
-    const raw = await this.request<{ chats?: DiscoverChat[]; conversations?: DiscoverChat[]; continuationToken?: string }>('GET', path);
-    // The discover endpoint returns chats under 'chats' or sometimes 'conversations'.
-    const chats = (raw as any).chats ?? (raw as any).conversations ?? [];
+    params.set('isPrefetch', String(opts.isPrefetch ?? false));
+    const path = `/api/csa/${this.region}/api/v1/teams/users/me/updates?${params.toString()}`;
+    const raw = await this.request<{ chats?: DiscoverChat[]; teams?: unknown[]; channels?: unknown[] }>('GET', path);
     return {
-      chats,
-      continuationToken: (raw as any).continuationToken,
+      chats: raw.chats ?? [],
       raw,
     };
+  }
+
+  /** Backwards-compat alias for the original method name. Prefer listChats(). */
+  async listChatsViaDiscover(opts: { pageSize?: number; continuationToken?: string } = {}): Promise<DiscoverChatsResponse> {
+    return this.listChats({ isPrefetch: false });
   }
 
   /**

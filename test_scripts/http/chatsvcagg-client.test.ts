@@ -29,7 +29,7 @@ describe('ChatsvcaggClient', () => {
 
   it('throws AuthRequired when no chatsvcagg token in session', async () => {
     const c = new ChatsvcaggClient(SESSION_WITHOUT_TOKEN, { httpTimeoutMs: 1000 });
-    await expect(c.listChatsViaDiscover()).rejects.toBeInstanceOf(AuthRequiredError);
+    await expect(c.listChats()).rejects.toBeInstanceOf(AuthRequiredError);
   });
 
   it('uses chatsvcagg token (not session.bearerToken) for Authorization', async () => {
@@ -39,28 +39,27 @@ describe('ChatsvcaggClient', () => {
       return new Response(JSON.stringify({ chats: [] }), { status: 200 });
     }) as typeof globalThis.fetch;
     const c = new ChatsvcaggClient(SESSION_WITH_TOKEN, { httpTimeoutMs: 1000 });
-    await c.listChatsViaDiscover();
+    await c.listChats();
     expect(captured).toBe('Bearer eyJ.CHATSVCAGG.TOKEN');
   });
 
-  it('listChatsViaDiscover hits the right URL with region from session', async () => {
+  it('listChats hits v1/updates with region from session', async () => {
     let capturedUrl = '';
     globalThis.fetch = (async (url) => {
       capturedUrl = String(url);
-      return new Response(JSON.stringify({ chats: [{ id: 'c1' }, { id: 'c2' }] }), { status: 200 });
+      return new Response(JSON.stringify({ chats: [{ id: 'c1' }, { id: 'c2' }], teams: [], channels: [] }), { status: 200 });
     }) as typeof globalThis.fetch;
     const c = new ChatsvcaggClient(SESSION_WITH_TOKEN, { httpTimeoutMs: 1000 });
-    const r = await c.listChatsViaDiscover({ pageSize: 7 });
-    expect(capturedUrl).toContain('/api/csa/emea/api/v1/teams/users/me/discover');
-    expect(capturedUrl).toContain('pageSize=7');
-    expect(capturedUrl).toContain('continuationToken=null');
+    const r = await c.listChats();
+    expect(capturedUrl).toContain('/api/csa/emea/api/v1/teams/users/me/updates');
+    expect(capturedUrl).toContain('isPrefetch=false');
     expect(r.chats.length).toBe(2);
     expect(r.chats[0].id).toBe('c1');
   });
 
-  it('listChatsViaDiscover handles "conversations" key in response', async () => {
+  it('listChatsViaDiscover (legacy alias) still works', async () => {
     globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ conversations: [{ id: 'c9' }] }), { status: 200 })) as typeof globalThis.fetch;
+      new Response(JSON.stringify({ chats: [{ id: 'c9' }] }), { status: 200 })) as typeof globalThis.fetch;
     const c = new ChatsvcaggClient(SESSION_WITH_TOKEN, { httpTimeoutMs: 1000 });
     const r = await c.listChatsViaDiscover();
     expect(r.chats[0].id).toBe('c9');
@@ -88,6 +87,6 @@ describe('ChatsvcaggClient', () => {
   it('throws GraphHttpError on 4xx', async () => {
     globalThis.fetch = (async () => new Response('Bad request.', { status: 400 })) as typeof globalThis.fetch;
     const c = new ChatsvcaggClient(SESSION_WITH_TOKEN, { httpTimeoutMs: 1000 });
-    await expect(c.listChatsViaDiscover()).rejects.toBeInstanceOf(GraphHttpError);
+    await expect(c.listChats()).rejects.toBeInstanceOf(GraphHttpError);
   });
 });
