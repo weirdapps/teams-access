@@ -17,13 +17,29 @@ import { captureSession } from '../auth/browser-capture';
 import { readSession, writeSession, type Session } from '../session/store';
 import { ExitCode, ExitWithCode } from '../util/exit-codes';
 
-/** Default headless renewal timeout. Headless mode drives 3 navigations
- *  (teams → outlook → office.com) to provoke Graph + chatsvcagg + ic3
- *  audience captures; needs ~45s headroom. */
+/** Default headless renewal timeout. Headless mode drives 4 navigations
+ *  (teams root → teams /v2/?view=Chat → outlook → office.com) to provoke
+ *  Graph + chatsvcagg + outlook + presence audience captures; needs ~60s
+ *  headroom (chat panel init alone takes ~7s). */
 const DEFAULT_RENEW_TIMEOUT_MS = 90_000;
 /** After Graph token captured, keep listening this long for additional
  *  audiences to land (chatsvcagg, ic3, etc). */
 const DEFAULT_DIAGNOSTIC_EXTRA_MS = 15_000;
+
+/**
+ * Audiences that downstream commands actually need. Renewal is considered
+ * incomplete (and exits AuthRequired) if any of these are missing — this
+ * prevents the silent-success failure mode where renew "worked" but
+ * list-messages still 401s on chatsvcagg.
+ *
+ * Keep in sync with what `health-check` probes: anything probed there should
+ * be required here, otherwise health-check will still detect breakage that
+ * renewal claimed to fix.
+ */
+const REQUIRED_AUDIENCES = [
+  'https://graph.microsoft.com',
+  'https://chatsvcagg.teams.microsoft.com',
+] as const;
 
 export interface AuthRenewOptions {
   /** Override the renew-specific timeout (default 30000ms). */
@@ -85,14 +101,34 @@ export async function runAuthRenew(opts: AuthRenewOptions = {}): Promise<AuthRen
     });
   }
 
-  // Persist the freshly-captured session.
+  // Persist the freshly-captured session BEFORE the audience check — even an
+  // incomplete capture is more useful on disk than nothing (e.g. Graph token
+  // refreshed for `list-teams` while chatsvcagg is still missing).
   writeSession(captured);
+
+  // Strict validation: renew is only "ok" if every audience downstream
+  // commands need was captured. Without this, headless flow drift (e.g. Teams
+  // SPA redesign that stops loading chatsvcagg on the chat URL) silently
+  // produces a session that looks fine but fails on first real use.
+  const capturedAudiences = Object.keys(captured.tokens ?? {});
+  const missing = REQUIRED_AUDIENCES.filter(aud => !capturedAudiences.includes(aud));
+  if (missing.length > 0) {
+    throw new ExitWithCode(ExitCode.AuthRequired, {
+      code: 'auth_renew_incomplete',
+      message:
+        `Headless renewal captured ${capturedAudiences.length} audiences but ` +
+        `${missing.length} required audience(s) are missing: ${missing.join(', ')}. ` +
+        `Run \`teams-cli login\` interactively (open the Chat tab in the diagnostic window).`,
+      capturedAudiences,
+      missingAudiences: missing,
+    });
+  }
 
   return {
     status: 'ok',
     sessionFile: sessionPath,
     account: captured.account ?? {},
     durationMs: Date.now() - t0,
-    audiencesCaptured: Object.keys(captured.tokens ?? {}).length,
+    audiencesCaptured: capturedAudiences.length,
   };
 }

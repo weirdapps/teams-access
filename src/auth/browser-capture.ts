@@ -284,15 +284,29 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       // Run navigations in a non-blocking IIFE so the `await captured` below
       // still drives the timeout/resolve loop. We only need the navigations to
       // FIRE the requests; the request listener captures Bearers as they go.
+      //
+      // Order matters:
+      //   1. Teams /v2/?view=Chat   — provokes chatsvcagg.teams.microsoft.com
+      //                                (chat list/updates endpoint). Without
+      //                                this, only base Graph token is captured
+      //                                and downstream `list-messages` etc fail
+      //                                401 with "no chatsvcagg token in
+      //                                session". 7s settle because the chat
+      //                                SPA panel takes longer to init than a
+      //                                static page.
+      //   2. outlook.office.com     — provokes Graph + outlook audiences.
+      //   3. www.office.com         — catches presence + remaining tenant
+      //                                surfaces.
       void (async () => {
-        for (const url of [
-          'https://outlook.office.com/',
-          'https://www.office.com/',
+        for (const { url, settleMs } of [
+          { url: 'https://teams.microsoft.com/v2/?view=Chat', settleMs: 7000 },
+          { url: 'https://outlook.office.com/', settleMs: 5000 },
+          { url: 'https://www.office.com/', settleMs: 5000 },
         ]) {
           try {
             process.stderr.write(`[teams-cli login] headless: navigating to ${url}\n`);
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-            await page.waitForTimeout(5000); // let post-load Bearer requests fire
+            await page.waitForTimeout(settleMs);
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             process.stderr.write(`[teams-cli login] headless nav warning (${url}): ${msg}\n`);
