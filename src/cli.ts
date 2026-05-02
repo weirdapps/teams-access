@@ -14,6 +14,7 @@ import { runListMessages } from './commands/list-messages';
 import { runSendMessage } from './commands/send-message';
 import { runHealthCheck } from './commands/health-check';
 import { runResolveMri } from './commands/resolve-mri';
+import { runAuthRenew } from './commands/auth-renew';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -139,6 +140,18 @@ program
   .action(async (mri: string) => {
     const session = loadSessionOrThrow();
     const result = await runResolveMri({ session, ...commonConfig(), mri });
+    writeJson(result);
+  });
+
+program
+  .command('auth-renew')
+  .description('Silently renew the Teams Bearer using the persisted browser profile (headless)')
+  .option('--timeout <ms>', 'Headless capture timeout (default 30000)', v => Number(v))
+  .action(async (cmd) => {
+    const result = await runAuthRenew({
+      timeoutMs: cmd.timeout,
+      chromeChannel: program.opts().chromeChannel,
+    });
     writeJson(result);
   });
 

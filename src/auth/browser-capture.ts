@@ -23,6 +23,12 @@ export interface CaptureOptions {
    * (URL, audience) tuples for Path B (multi-service) architecture work.
    */
   diagnosticExtraMs?: number;
+  /**
+   * When true, launch Chromium headless. Requires a persistent profileDir
+   * with a valid ESTSAUTHPERSISTENT cookie so Entra silently re-issues
+   * Bearer tokens without user interaction. Used by `teams-cli auth-renew`.
+   */
+  headless?: boolean;
 }
 
 export interface CapturedTokenInfo {
@@ -148,7 +154,7 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
   try {
     context = await chromium.launchPersistentContext(opts.profileDir ?? '', {
       channel: opts.chromeChannel,
-      headless: false,
+      headless: opts.headless ?? false,
       viewport: null,
     });
 
@@ -265,7 +271,35 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
     process.stderr.write(`[teams-cli login] navigated to ${TEAMS_ROOT}\n`);
     process.stderr.write(`[teams-cli login] waiting for a Graph-audience Bearer (timeout ${opts.loginTimeoutMs}ms)\n`);
     process.stderr.write(`[teams-cli login] full request trace: ${tracePath}\n`);
-    process.stderr.write(`[teams-cli login] HINT: open a chat AND scroll its history. That triggers the chat-list and chat-message endpoints we want to discover.\n`);
+    if (!opts.headless) {
+      process.stderr.write(`[teams-cli login] HINT: open a chat AND scroll its history. That triggers the chat-list and chat-message endpoints we want to discover.\n`);
+    }
+
+    // In headless mode, the Teams SPA doesn't auto-navigate, so the user-clicks
+    // hint above doesn't apply. Drive the browser through M365 surfaces that
+    // reliably provoke Graph + chatsvcagg + ic3 audience requests. Validated
+    // empirically: this sequence captures all critical Phase 1 audiences
+    // (graph.microsoft.com, chatsvcagg, ic3, presence) in ~45s headless.
+    if (opts.headless) {
+      // Run navigations in a non-blocking IIFE so the `await captured` below
+      // still drives the timeout/resolve loop. We only need the navigations to
+      // FIRE the requests; the request listener captures Bearers as they go.
+      void (async () => {
+        for (const url of [
+          'https://outlook.office.com/',
+          'https://www.office.com/',
+        ]) {
+          try {
+            process.stderr.write(`[teams-cli login] headless: navigating to ${url}\n`);
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await page.waitForTimeout(5000); // let post-load Bearer requests fire
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            process.stderr.write(`[teams-cli login] headless nav warning (${url}): ${msg}\n`);
+          }
+        }
+      })();
+    }
 
     const info = await captured;
 
