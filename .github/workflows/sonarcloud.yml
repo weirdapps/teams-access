@@ -9,6 +9,7 @@ on:
 
 jobs:
   sonarcloud:
+    if: ${{ !github.event.repository.private }}
     name: SonarCloud
     runs-on: ubuntu-latest
 
