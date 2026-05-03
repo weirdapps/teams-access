@@ -12,16 +12,26 @@
     "build": "tsc && chmod +x dist/cli.js",
     "cli": "ts-node src/cli.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint",
+    "format": "prettier --write ."
   },
   "dependencies": {
     "commander": "^14.0.3"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
+    "@typescript-eslint/eslint-plugin": "^8.21.0",
+    "@typescript-eslint/parser": "^8.21.0",
+    "@vitest/coverage-v8": "^4.0.0",
+    "eslint": "^9.39.0",
+    "eslint-config-prettier": "^10.0.1",
     "playwright": "^1.59.1",
+    "prettier": "^3.4.2",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3",
+    "typescript-eslint": "^8.21.0",
     "vitest": "^4.1.4"
   },
   "engines": {
