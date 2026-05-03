@@ -8,23 +8,24 @@ Sister project to [`outlook-cli`](https://github.com/weirdapps/outlook-access). 
 
 **v0.1.0 (Plan 1 + amendment 1 — Path B hybrid).** Eight commands shipped:
 
-| Command | Backend | Verified |
-|---------|---------|----------|
-| `login` | Playwright capture of Teams web Bearers | ✅ multi-audience |
-| `auth-check` | Microsoft Graph `/me` | ✅ |
-| `list-teams` | Microsoft Graph `/me/joinedTeams` | ✅ |
-| `list-channels` | Microsoft Graph `/teams/{id}/channels` | ✅ |
-| `list-chats` | private chatsvcagg `/api/csa/{region}/api/v1/teams/users/me/updates` | ✅ (5,901 chats on test account) |
-| `list-messages` (chat) | private chatsvc `/api/chatsvc/{region}/v1/.../messages` | ✅ |
-| `list-messages` (channel) | private chatsvcagg `/api/csa/{region}/api/v1/containers/{id}/posts` | ✅ |
-| `send-message` (chat) | Microsoft Graph `POST /chats/{id}/messages` | ⚠ scope verified, end-to-end deferred |
-| `health-check` | exercises one of each | ✅ |
+| Command                   | Backend                                                              | Verified                              |
+| ------------------------- | -------------------------------------------------------------------- | ------------------------------------- |
+| `login`                   | Playwright capture of Teams web Bearers                              | ✅ multi-audience                     |
+| `auth-check`              | Microsoft Graph `/me`                                                | ✅                                    |
+| `list-teams`              | Microsoft Graph `/me/joinedTeams`                                    | ✅                                    |
+| `list-channels`           | Microsoft Graph `/teams/{id}/channels`                               | ✅                                    |
+| `list-chats`              | private chatsvcagg `/api/csa/{region}/api/v1/teams/users/me/updates` | ✅ (5,901 chats on test account)      |
+| `list-messages` (chat)    | private chatsvc `/api/chatsvc/{region}/v1/.../messages`              | ✅                                    |
+| `list-messages` (channel) | private chatsvcagg `/api/csa/{region}/api/v1/containers/{id}/posts`  | ✅                                    |
+| `send-message` (chat)     | Microsoft Graph `POST /chats/{id}/messages`                          | ⚠ scope verified, end-to-end deferred |
+| `health-check`            | exercises one of each                                                | ✅                                    |
 
 ## Why this approach (Path B)
 
 The original plan was to drive everything via Microsoft Graph. The spike (see `docs/spike-results.md`) found that the Teams web client's Graph token, on a typical NBG-style tenant, does **not** carry the scopes Microsoft Graph requires for `Chat.Read*` or `ChannelMessage.Read.All`. Graph rejects those calls with 403.
 
-But Teams web itself reads chats and channels constantly — it just uses *different* services with *different* audience-bound tokens:
+But Teams web itself reads chats and channels constantly — it just uses _different_ services with _different_ audience-bound tokens:
+
 - `chatsvc` (audience `https://ic3.teams.office.com`) for chat message content
 - `chatsvcagg` (audience `https://chatsvcagg.teams.microsoft.com`) for chat list + channel posts
 
@@ -46,6 +47,7 @@ npm run build
 ```
 
 Optional global install:
+
 ```bash
 npm link
 ```
@@ -61,6 +63,7 @@ A Chrome window opens at `teams.microsoft.com`. Sign in normally. The script cap
 **Important during login**: click the **Calendar tab** or **Files tab** in Teams web while the browser is open. Those trigger Microsoft Graph requests, so the Graph-audience token gets captured. Without that, commands using Graph (`auth-check`, `list-teams`, `list-channels`, `send-message`) will fail with 401.
 
 After login:
+
 ```bash
 teams-cli auth-check         # confirms the cached session works against Graph
 teams-cli health-check       # probes one read of each kind
@@ -70,25 +73,25 @@ teams-cli list-teams
 
 ## Configuration
 
-| Setting | Flag | Env var | Default |
-|---|---|---|---|
-| HTTP timeout | `--timeout <ms>` | `TEAMS_CLI_HTTP_TIMEOUT_MS` | 30000 |
-| Login timeout | `--login-timeout <ms>` | `TEAMS_CLI_LOGIN_TIMEOUT_MS` | 300000 |
-| Chrome channel | `--chrome-channel <name>` | `TEAMS_CLI_CHROME_CHANNEL` | chrome |
+| Setting        | Flag                      | Env var                      | Default |
+| -------------- | ------------------------- | ---------------------------- | ------- |
+| HTTP timeout   | `--timeout <ms>`          | `TEAMS_CLI_HTTP_TIMEOUT_MS`  | 30000   |
+| Login timeout  | `--login-timeout <ms>`    | `TEAMS_CLI_LOGIN_TIMEOUT_MS` | 300000  |
+| Chrome channel | `--chrome-channel <name>` | `TEAMS_CLI_CHROME_CHANNEL`   | chrome  |
 
 Precedence: CLI flag > env var > default.
 
 ## Exit codes
 
-| Code | Meaning |
-|---|---|
-| 0 | Success |
-| 1 | Unexpected internal error |
-| 2 | Invalid usage |
-| 3 | Configuration error |
-| 4 | Auth failure (run `teams-cli login`) |
-| 5 | Upstream API error |
-| 6 | IO error |
+| Code | Meaning                              |
+| ---- | ------------------------------------ |
+| 0    | Success                              |
+| 1    | Unexpected internal error            |
+| 2    | Invalid usage                        |
+| 3    | Configuration error                  |
+| 4    | Auth failure (run `teams-cli login`) |
+| 5    | Upstream API error                   |
+| 6    | IO error                             |
 
 ## Session file format
 

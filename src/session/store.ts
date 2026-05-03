@@ -32,10 +32,10 @@ export interface AudienceToken {
 }
 
 export interface SessionRegion {
-  chatsvc?: string;       // e.g. "emea"
-  csa?: string;           // e.g. "emea"
-  mt?: string;            // e.g. "emea-03"
-  asyncgw?: string;       // e.g. "eu-prod"
+  chatsvc?: string; // e.g. "emea"
+  csa?: string; // e.g. "emea"
+  mt?: string; // e.g. "emea-03"
+  asyncgw?: string; // e.g. "eu-prod"
 }
 
 export interface Session {

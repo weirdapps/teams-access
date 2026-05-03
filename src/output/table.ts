@@ -15,30 +15,27 @@ function cellOf(row: Record<string, unknown>, col: ColumnSpec): string {
   return s;
 }
 
-export function renderTable(
-  rows: Array<Record<string, unknown>>,
-  columns: ColumnSpec[],
-): string {
-  const headerCells = columns.map(c => c.header);
-  const bodyRows = rows.map(r => columns.map(c => cellOf(r, c)));
+export function renderTable(rows: Array<Record<string, unknown>>, columns: ColumnSpec[]): string {
+  const headerCells = columns.map((c) => c.header);
+  const bodyRows = rows.map((r) => columns.map((c) => cellOf(r, c)));
 
   const widths = columns.map((c, i) =>
-    Math.max(headerCells[i].length, ...bodyRows.map(r => r[i].length), 0),
+    Math.max(headerCells[i].length, ...bodyRows.map((r) => r[i].length), 0),
   );
 
   const fmt = (cells: string[]) =>
-    cells.map((c, i) => c.padEnd(widths[i])).join('  ').trimEnd();
+    cells
+      .map((c, i) => c.padEnd(widths[i]))
+      .join('  ')
+      .trimEnd();
 
   const lines: string[] = [];
   lines.push(fmt(headerCells));
-  lines.push(fmt(widths.map(w => '-'.repeat(w))));
+  lines.push(fmt(widths.map((w) => '-'.repeat(w))));
   for (const r of bodyRows) lines.push(fmt(r));
   return lines.join('\n');
 }
 
-export function writeTable(
-  rows: Array<Record<string, unknown>>,
-  columns: ColumnSpec[],
-): void {
+export function writeTable(rows: Array<Record<string, unknown>>, columns: ColumnSpec[]): void {
   process.stdout.write(renderTable(rows, columns) + '\n');
 }

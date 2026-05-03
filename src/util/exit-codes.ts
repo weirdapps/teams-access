@@ -18,7 +18,10 @@ export interface ErrorPayload {
 }
 
 export class ExitWithCode extends Error {
-  constructor(public readonly code: ExitCodeValue, public readonly payload: ErrorPayload) {
+  constructor(
+    public readonly code: ExitCodeValue,
+    public readonly payload: ErrorPayload,
+  ) {
     super(payload.message ?? payload.code);
     this.name = 'ExitWithCode';
   }

@@ -23,8 +23,12 @@ const SESSION_WITH_TOKEN = {
 
 describe('ChatsvcClient', () => {
   let originalFetch: typeof globalThis.fetch;
-  beforeEach(() => { originalFetch = globalThis.fetch; });
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
 
   it('throws AuthRequired when no IC3 token in session', async () => {
     const c = new ChatsvcClient(SESSION_NO_TOKEN, { httpTimeoutMs: 1000 });
@@ -64,19 +68,25 @@ describe('ChatsvcClient', () => {
       return new Response(JSON.stringify({ messages: [] }), { status: 200 });
     }) as typeof globalThis.fetch;
     const c = new ChatsvcClient(SESSION_WITH_TOKEN, { httpTimeoutMs: 1000 });
-    await c.getChatMessages('ignored', { syncState: 'https://teams.microsoft.com/api/chatsvc/emea/v1/foo?syncState=abc' });
+    await c.getChatMessages('ignored', {
+      syncState: 'https://teams.microsoft.com/api/chatsvc/emea/v1/foo?syncState=abc',
+    });
     expect(url).toBe('https://teams.microsoft.com/api/chatsvc/emea/v1/foo?syncState=abc');
   });
 
   it('parses messages from response', async () => {
-    globalThis.fetch = (async () => new Response(JSON.stringify({
-      messages: [
-        { id: 'm1', content: 'hi', composetime: '2026-05-01T00:00:00Z' },
-        { id: 'm2', content: 'hey', composetime: '2026-05-01T00:01:00Z' },
-      ],
-      tenantId: 'tid',
-      _metadata: { syncState: 'https://...' },
-    }), { status: 200 })) as typeof globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          messages: [
+            { id: 'm1', content: 'hi', composetime: '2026-05-01T00:00:00Z' },
+            { id: 'm2', content: 'hey', composetime: '2026-05-01T00:01:00Z' },
+          ],
+          tenantId: 'tid',
+          _metadata: { syncState: 'https://...' },
+        }),
+        { status: 200 },
+      )) as typeof globalThis.fetch;
     const c = new ChatsvcClient(SESSION_WITH_TOKEN, { httpTimeoutMs: 1000 });
     const r = await c.getChatMessages('19:abc@thread.v2');
     expect(r.messages.length).toBe(2);
@@ -85,7 +95,8 @@ describe('ChatsvcClient', () => {
   });
 
   it('throws GraphHttpError on 404', async () => {
-    globalThis.fetch = (async () => new Response('Not found', { status: 404 })) as typeof globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response('Not found', { status: 404 })) as typeof globalThis.fetch;
     const c = new ChatsvcClient(SESSION_WITH_TOKEN, { httpTimeoutMs: 1000 });
     await expect(c.getChatMessages('19:nope@thread.v2')).rejects.toBeInstanceOf(GraphHttpError);
   });

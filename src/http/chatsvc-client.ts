@@ -31,12 +31,12 @@ export interface ChatsvcMessage {
   conversationLink?: string;
   contenttype?: string;
   type?: string;
-  messagetype?: string;          // e.g. "Text", "RichText/Html", "ThreadActivity/AddMember", ...
-  content?: string;              // raw body — text or HTML depending on messagetype
-  from?: string;                 // contact link, ends with .../contacts/8:orgid:<oid>
-  imdisplayname?: string;        // sender display name
+  messagetype?: string; // e.g. "Text", "RichText/Html", "ThreadActivity/AddMember", ...
+  content?: string; // raw body — text or HTML depending on messagetype
+  from?: string; // contact link, ends with .../contacts/8:orgid:<oid>
+  imdisplayname?: string; // sender display name
   fromDisplayNameInToken?: string;
-  composetime?: string;          // ISO timestamp
+  composetime?: string; // ISO timestamp
   originalarrivaltime?: string;
   sequenceId?: number;
   version?: string;
@@ -51,8 +51,8 @@ export interface ChatsvcMessagesResponse {
   _metadata?: {
     lastCompleteSegmentStartTime?: number;
     lastCompleteSegmentEndTime?: number;
-    backwardLink?: string;       // URL for paging backwards (older messages)
-    syncState?: string;          // URL for incremental sync (newer messages)
+    backwardLink?: string; // URL for paging backwards (older messages)
+    syncState?: string; // URL for incremental sync (newer messages)
   };
 }
 
@@ -63,7 +63,10 @@ function isRetryable(status: number): boolean {
 async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let to: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    to = setTimeout(() => reject(new UpstreamError(599, 'Timeout', `${label} timed out after ${ms}ms`)), ms);
+    to = setTimeout(
+      () => reject(new UpstreamError(599, 'Timeout', `${label} timed out after ${ms}ms`)),
+      ms,
+    );
   });
   try {
     return await Promise.race([p, timeout]);
@@ -73,7 +76,7 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 export class ChatsvcClient {
@@ -92,7 +95,9 @@ export class ChatsvcClient {
   private token(): string {
     const t = this.session.tokens?.[AUDIENCE];
     if (!t) {
-      throw new AuthRequiredError(`No '${AUDIENCE}' token in session. Re-run \`teams-cli login\` and ensure the diagnostic window captures IC3 requests (open a chat in Teams).`);
+      throw new AuthRequiredError(
+        `No '${AUDIENCE}' token in session. Re-run \`teams-cli login\` and ensure the diagnostic window captures IC3 requests (open a chat in Teams).`,
+      );
     }
     return t.bearerToken;
   }
@@ -116,19 +121,28 @@ export class ChatsvcClient {
     let lastErr: Error | undefined;
     for (let attempt = 0; attempt <= this.retries; attempt++) {
       try {
-        const res = await withTimeout(fetch(url, init), this.opts.httpTimeoutMs, `${method} ${url}`);
-        const requestId = res.headers.get('request-id') ?? res.headers.get('x-ms-correlation-id') ?? undefined;
+        const res = await withTimeout(
+          fetch(url, init),
+          this.opts.httpTimeoutMs,
+          `${method} ${url}`,
+        );
+        const requestId =
+          res.headers.get('request-id') ?? res.headers.get('x-ms-correlation-id') ?? undefined;
         if (res.status === 401) {
           let msg = 'unauthenticated';
-          try { msg = (await res.text()).slice(0, 200); } catch {}
+          try {
+            msg = (await res.text()).slice(0, 200);
+          } catch {}
           throw new AuthRequiredError(msg, requestId);
         }
         if (res.status >= 200 && res.status < 300) {
           if (res.status === 204) return undefined as unknown as T;
-          return await res.json() as T;
+          return (await res.json()) as T;
         }
         let bodyText = '';
-        try { bodyText = await res.text(); } catch {}
+        try {
+          bodyText = await res.text();
+        } catch {}
         const code = `HTTP_${res.status}`;
         const message = bodyText.slice(0, 200) || `HTTP ${res.status}`;
         if (isRetryable(res.status) && attempt < this.retries) {
@@ -163,10 +177,14 @@ export class ChatsvcClient {
    * @param opts.backwardLink  URL from prior response's _metadata.backwardLink
    *                           for paging through history.
    */
-  async getChatMessages(threadId: string, opts: { pageSize?: number; startTime?: number; syncState?: string; backwardLink?: string } = {}): Promise<ChatsvcMessagesResponse> {
+  async getChatMessages(
+    threadId: string,
+    opts: { pageSize?: number; startTime?: number; syncState?: string; backwardLink?: string } = {},
+  ): Promise<ChatsvcMessagesResponse> {
     // If a paging URL is provided, use it directly (Teams returns absolute URLs).
     if (opts.syncState) return await this.request<ChatsvcMessagesResponse>('GET', opts.syncState);
-    if (opts.backwardLink) return await this.request<ChatsvcMessagesResponse>('GET', opts.backwardLink);
+    if (opts.backwardLink)
+      return await this.request<ChatsvcMessagesResponse>('GET', opts.backwardLink);
 
     const params = new URLSearchParams();
     params.set('view', 'msnp24Equivalent|supportsMessageProperties');

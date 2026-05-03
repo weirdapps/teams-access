@@ -35,7 +35,11 @@ export interface HealthCheckResult {
   account?: { upn?: string; oid?: string };
 }
 
-async function timed<T>(fn: () => Promise<T>): Promise<{ ok: true; value: T; durationMs: number } | { ok: false; err: Error; durationMs: number }> {
+async function timed<T>(
+  fn: () => Promise<T>,
+): Promise<
+  { ok: true; value: T; durationMs: number } | { ok: false; err: Error; durationMs: number }
+> {
   const t0 = Date.now();
   try {
     const value = await fn();
@@ -57,9 +61,19 @@ export async function runHealthCheck(opts: HealthCheckOptions): Promise<HealthCh
     });
     if (r.ok) {
       account = { upn: r.value.userPrincipalName, oid: r.value.id };
-      probes.push({ name: 'graph_me', ok: true, detail: `upn=${r.value.userPrincipalName}`, durationMs: r.durationMs });
+      probes.push({
+        name: 'graph_me',
+        ok: true,
+        detail: `upn=${r.value.userPrincipalName}`,
+        durationMs: r.durationMs,
+      });
     } else {
-      probes.push({ name: 'graph_me', ok: false, detail: r.err.message.slice(0, 200), durationMs: r.durationMs });
+      probes.push({
+        name: 'graph_me',
+        ok: false,
+        detail: r.err.message.slice(0, 200),
+        durationMs: r.durationMs,
+      });
     }
   }
 
@@ -70,9 +84,19 @@ export async function runHealthCheck(opts: HealthCheckOptions): Promise<HealthCh
       return await g.get<{ value: unknown[] }>('/me/joinedTeams');
     });
     if (r.ok) {
-      probes.push({ name: 'graph_joined_teams', ok: true, detail: `count=${r.value.value.length}`, durationMs: r.durationMs });
+      probes.push({
+        name: 'graph_joined_teams',
+        ok: true,
+        detail: `count=${r.value.value.length}`,
+        durationMs: r.durationMs,
+      });
     } else {
-      probes.push({ name: 'graph_joined_teams', ok: false, detail: r.err.message.slice(0, 200), durationMs: r.durationMs });
+      probes.push({
+        name: 'graph_joined_teams',
+        ok: false,
+        detail: r.err.message.slice(0, 200),
+        durationMs: r.durationMs,
+      });
     }
   }
 
@@ -84,12 +108,22 @@ export async function runHealthCheck(opts: HealthCheckOptions): Promise<HealthCh
       return await c.listChats();
     });
     if (r.ok) {
-      probes.push({ name: 'chatsvcagg_updates', ok: true, detail: `chats=${r.value.chats.length}`, durationMs: r.durationMs });
+      probes.push({
+        name: 'chatsvcagg_updates',
+        ok: true,
+        detail: `chats=${r.value.chats.length}`,
+        durationMs: r.durationMs,
+      });
       if (!firstChatId && r.value.chats.length > 0) {
         firstChatId = r.value.chats[0].id;
       }
     } else {
-      probes.push({ name: 'chatsvcagg_updates', ok: false, detail: r.err.message.slice(0, 200), durationMs: r.durationMs });
+      probes.push({
+        name: 'chatsvcagg_updates',
+        ok: false,
+        detail: r.err.message.slice(0, 200),
+        durationMs: r.durationMs,
+      });
     }
   }
 
@@ -100,19 +134,33 @@ export async function runHealthCheck(opts: HealthCheckOptions): Promise<HealthCh
       return await c.getChatMessages(firstChatId!, { pageSize: 1 });
     });
     if (r.ok) {
-      probes.push({ name: 'chatsvc_messages', ok: true, detail: `messages=${r.value.messages.length} thread=${firstChatId}`, durationMs: r.durationMs });
+      probes.push({
+        name: 'chatsvc_messages',
+        ok: true,
+        detail: `messages=${r.value.messages.length} thread=${firstChatId}`,
+        durationMs: r.durationMs,
+      });
     } else {
-      probes.push({ name: 'chatsvc_messages', ok: false, detail: r.err.message.slice(0, 200), durationMs: r.durationMs });
+      probes.push({
+        name: 'chatsvc_messages',
+        ok: false,
+        detail: r.err.message.slice(0, 200),
+        durationMs: r.durationMs,
+      });
     }
   } else {
-    probes.push({ name: 'chatsvc_messages', ok: false, detail: 'skipped — no chat thread id available (provide --probe-chat-thread-id)', durationMs: 0 });
+    probes.push({
+      name: 'chatsvc_messages',
+      ok: false,
+      detail: 'skipped — no chat thread id available (provide --probe-chat-thread-id)',
+      durationMs: 0,
+    });
   }
 
   // Verdict
-  const okCount = probes.filter(p => p.ok).length;
-  const overall: HealthCheckResult['overall'] = okCount === probes.length ? 'ok'
-    : okCount === 0 ? 'broken'
-    : 'degraded';
+  const okCount = probes.filter((p) => p.ok).length;
+  const overall: HealthCheckResult['overall'] =
+    okCount === probes.length ? 'ok' : okCount === 0 ? 'broken' : 'degraded';
 
   return { overall, probes, account };
 }

@@ -25,7 +25,7 @@ export interface ListChannelsResult {
 
 /** Side effect: cache each team's General channel id into session (lazy). */
 function cacheGeneralChannel(session: Session, teamUuid: string, channels: Channel[]): boolean {
-  const general = channels.find(c => c.displayName === 'General');
+  const general = channels.find((c) => c.displayName === 'General');
   if (!general) return false;
   if (!session.generalChannelByTeamId) session.generalChannelByTeamId = {};
   if (session.generalChannelByTeamId[teamUuid] === general.id) return false; // no change
@@ -45,10 +45,12 @@ export async function runListChannels(opts: ListChannelsOptions): Promise<ListCh
     let dirty = false;
 
     if (opts.teamId) {
-      const r = await c.get<{ value: Channel[] }>(`/teams/${encodeURIComponent(opts.teamId)}/channels`);
+      const r = await c.get<{ value: Channel[] }>(
+        `/teams/${encodeURIComponent(opts.teamId)}/channels`,
+      );
       dirty = cacheGeneralChannel(opts.session, opts.teamId, r.value) || dirty;
       if (dirty) writeSession(opts.session);
-      return { channels: r.value.map(ch => ({ ...ch, teamId: opts.teamId! })) };
+      return { channels: r.value.map((ch) => ({ ...ch, teamId: opts.teamId! })) };
     }
 
     // --all-teams: fan out

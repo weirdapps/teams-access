@@ -22,8 +22,8 @@ describe('runResolveMri', () => {
           displayName: 'User Name',
           userPrincipalName: 'user@example.com',
         }),
-        { status: 200 }
-      )
+        { status: 200 },
+      ),
     );
 
     const result = await runResolveMri({
@@ -37,22 +37,26 @@ describe('runResolveMri', () => {
     expect(result.id).toBe('1234-aaaa');
     expect(fetchSpy).toHaveBeenCalledWith(
       expect.stringContaining('/users/1234-aaaa'),
-      expect.anything()
+      expect.anything(),
     );
   });
 
   it('rejects malformed MRI (no orgid prefix)', async () => {
     await expect(
-      runResolveMri({ session: fakeSession, httpTimeoutMs: 30000, mri: 'not-a-mri' })
+      runResolveMri({ session: fakeSession, httpTimeoutMs: 30000, mri: 'not-a-mri' }),
     ).rejects.toThrow(/invalid MRI/i);
   });
 
   it('returns null email when Graph response has no mail field', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(
-        JSON.stringify({ id: 'x', displayName: 'Guest', userPrincipalName: 'guest#EXT#@ext.onmicrosoft.com' }),
-        { status: 200 }
-      )
+        JSON.stringify({
+          id: 'x',
+          displayName: 'Guest',
+          userPrincipalName: 'guest#EXT#@ext.onmicrosoft.com',
+        }),
+        { status: 200 },
+      ),
     );
 
     const result = await runResolveMri({

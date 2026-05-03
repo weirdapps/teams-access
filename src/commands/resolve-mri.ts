@@ -12,8 +12,8 @@ export interface ResolveMriOptions {
 }
 
 export interface ResolveMriResult {
-  id: string;            // aad-oid
-  email: string | null;  // mail field; null for guests
+  id: string; // aad-oid
+  email: string | null; // mail field; null for guests
   displayName: string;
 }
 

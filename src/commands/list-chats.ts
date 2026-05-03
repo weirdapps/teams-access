@@ -12,7 +12,7 @@ import type { Session } from '../session/store';
 export interface ListChatsOptions {
   session: Session;
   httpTimeoutMs: number;
-  limit?: number;       // client-side cap on returned chats (no API pagination)
+  limit?: number; // client-side cap on returned chats (no API pagination)
 }
 
 export interface ListChatsResult {

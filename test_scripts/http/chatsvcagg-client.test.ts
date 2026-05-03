@@ -24,8 +24,12 @@ const SESSION_WITH_TOKEN = {
 
 describe('ChatsvcaggClient', () => {
   let originalFetch: typeof globalThis.fetch;
-  beforeEach(() => { originalFetch = globalThis.fetch; });
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
 
   it('throws AuthRequired when no chatsvcagg token in session', async () => {
     const c = new ChatsvcaggClient(SESSION_WITHOUT_TOKEN, { httpTimeoutMs: 1000 });
@@ -47,7 +51,10 @@ describe('ChatsvcaggClient', () => {
     let capturedUrl = '';
     globalThis.fetch = (async (url) => {
       capturedUrl = String(url);
-      return new Response(JSON.stringify({ chats: [{ id: 'c1' }, { id: 'c2' }], teams: [], channels: [] }), { status: 200 });
+      return new Response(
+        JSON.stringify({ chats: [{ id: 'c1' }, { id: 'c2' }], teams: [], channels: [] }),
+        { status: 200 },
+      );
     }) as typeof globalThis.fetch;
     const c = new ChatsvcaggClient(SESSION_WITH_TOKEN, { httpTimeoutMs: 1000 });
     const r = await c.listChats();
@@ -59,7 +66,9 @@ describe('ChatsvcaggClient', () => {
 
   it('listChatsViaDiscover (legacy alias) still works', async () => {
     globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ chats: [{ id: 'c9' }] }), { status: 200 })) as typeof globalThis.fetch;
+      new Response(JSON.stringify({ chats: [{ id: 'c9' }] }), {
+        status: 200,
+      })) as typeof globalThis.fetch;
     const c = new ChatsvcaggClient(SESSION_WITH_TOKEN, { httpTimeoutMs: 1000 });
     const r = await c.listChatsViaDiscover();
     expect(r.chats[0].id).toBe('c9');
@@ -72,11 +81,7 @@ describe('ChatsvcaggClient', () => {
       return new Response(JSON.stringify({ posts: [], hasMore: false }), { status: 200 });
     }) as typeof globalThis.fetch;
     const c = new ChatsvcaggClient(SESSION_WITH_TOKEN, { httpTimeoutMs: 1000 });
-    await c.listChannelPosts(
-      '19:abc@thread.tacv2',
-      '19:general@thread.tacv2',
-      { pageSize: 5 },
-    );
+    await c.listChannelPosts('19:abc@thread.tacv2', '19:general@thread.tacv2', { pageSize: 5 });
     expect(capturedUrl).toContain('/containers/19%3Aabc%40thread.tacv2/posts');
     expect(capturedUrl).toContain('modality=post');
     expect(capturedUrl).toContain('pageSize=5');
@@ -85,7 +90,8 @@ describe('ChatsvcaggClient', () => {
   });
 
   it('throws GraphHttpError on 4xx', async () => {
-    globalThis.fetch = (async () => new Response('Bad request.', { status: 400 })) as typeof globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response('Bad request.', { status: 400 })) as typeof globalThis.fetch;
     const c = new ChatsvcaggClient(SESSION_WITH_TOKEN, { httpTimeoutMs: 1000 });
     await expect(c.listChats()).rejects.toBeInstanceOf(GraphHttpError);
   });

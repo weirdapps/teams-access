@@ -21,13 +21,13 @@ const DEFAULT_BASE = 'https://graph.microsoft.com/v1.0';
 export interface GraphClientOptions {
   httpTimeoutMs: number;
   baseUrl?: string;
-  retries?: number;       // default 3
-  retryBaseMs?: number;   // default 500 (exponential)
+  retries?: number; // default 3
+  retryBaseMs?: number; // default 500 (exponential)
 }
 
 export interface PaginateOptions {
-  maxResults: number;     // safety cap; cappedEarly:true if hit
-  pageSize?: number;      // optional $top to add to first call
+  maxResults: number; // safety cap; cappedEarly:true if hit
+  pageSize?: number; // optional $top to add to first call
 }
 
 export interface PaginateResult<T> {
@@ -46,7 +46,10 @@ function isRetryable(status: number): boolean {
 async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let to: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    to = setTimeout(() => reject(new UpstreamError(599, 'Timeout', `${label} timed out after ${ms}ms`)), ms);
+    to = setTimeout(
+      () => reject(new UpstreamError(599, 'Timeout', `${label} timed out after ${ms}ms`)),
+      ms,
+    );
   });
   try {
     return await Promise.race([p, timeout]);
@@ -56,7 +59,7 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 export class GraphClient {
@@ -92,19 +95,27 @@ export class GraphClient {
     let lastErr: Error | undefined;
     for (let attempt = 0; attempt <= this.retries; attempt++) {
       try {
-        const res = await withTimeout(fetch(url, init), this.opts.httpTimeoutMs, `${method} ${url}`);
+        const res = await withTimeout(
+          fetch(url, init),
+          this.opts.httpTimeoutMs,
+          `${method} ${url}`,
+        );
         const requestId = res.headers.get('request-id') ?? undefined;
         if (res.status === 401) {
           let msg = 'unauthenticated';
-          try { msg = ((await res.json()) as GraphErrorBody).error?.message ?? msg; } catch {}
+          try {
+            msg = ((await res.json()) as GraphErrorBody).error?.message ?? msg;
+          } catch {}
           throw new AuthRequiredError(msg, requestId);
         }
         if (res.status >= 200 && res.status < 300) {
           if (res.status === 204) return undefined as unknown as T;
-          return await res.json() as T;
+          return (await res.json()) as T;
         }
         let body: GraphErrorBody = {};
-        try { body = await res.json() as GraphErrorBody; } catch {}
+        try {
+          body = (await res.json()) as GraphErrorBody;
+        } catch {}
         const code = body.error?.code ?? `HTTP_${res.status}`;
         const message = body.error?.message ?? `HTTP ${res.status}`;
         if (isRetryable(res.status) && attempt < this.retries) {
@@ -128,10 +139,18 @@ export class GraphClient {
     throw lastErr ?? new UpstreamError(599, 'RetriesExhausted', 'No more retries available');
   }
 
-  get<T>(path: string): Promise<T> { return this.request<T>('GET', path); }
-  post<T>(path: string, body: unknown): Promise<T> { return this.request<T>('POST', path, body); }
-  patch<T>(path: string, body: unknown): Promise<T> { return this.request<T>('PATCH', path, body); }
-  delete<T>(path: string): Promise<T> { return this.request<T>('DELETE', path); }
+  get<T>(path: string): Promise<T> {
+    return this.request<T>('GET', path);
+  }
+  post<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>('POST', path, body);
+  }
+  patch<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>('PATCH', path, body);
+  }
+  delete<T>(path: string): Promise<T> {
+    return this.request<T>('DELETE', path);
+  }
 
   async paginate<T>(initialPath: string, opts: PaginateOptions): Promise<PaginateResult<T>> {
     const items: T[] = [];
@@ -144,7 +163,10 @@ export class GraphClient {
     while (url) {
       const page = await this.request<{ value: T[]; '@odata.nextLink'?: string }>('GET', url);
       for (const v of page.value) {
-        if (items.length >= opts.maxResults) { cappedEarly = true; break; }
+        if (items.length >= opts.maxResults) {
+          cappedEarly = true;
+          break;
+        }
         items.push(v);
       }
       if (cappedEarly || !page['@odata.nextLink']) break;

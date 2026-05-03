@@ -21,10 +21,12 @@ import { homedir } from 'node:os';
 const program = new Command();
 program
   .name('teams-cli')
-  .description('Microsoft Teams CLI via captured Bearer token. Path B: Graph + private chatsvc/chatsvcagg.')
+  .description(
+    'Microsoft Teams CLI via captured Bearer token. Path B: Graph + private chatsvc/chatsvcagg.',
+  )
   .version('0.1.0')
-  .option('--timeout <ms>', 'Per-HTTP-call timeout', v => Number(v))
-  .option('--login-timeout <ms>', 'Max wait for interactive login', v => Number(v))
+  .option('--timeout <ms>', 'Per-HTTP-call timeout', (v) => Number(v))
+  .option('--login-timeout <ms>', 'Max wait for interactive login', (v) => Number(v))
   .option('--chrome-channel <name>', 'Playwright Chrome channel')
   .option('--no-auto-reauth', 'Do NOT silently reopen the login browser on expired session');
 
@@ -51,7 +53,11 @@ function commonConfig(): { httpTimeoutMs: number } {
 program
   .command('login')
   .description('Capture a Teams web session by signing in via Playwright Chrome window.')
-  .option('--diagnostic-extra-ms <ms>', 'After capture, keep browser open this long to collect more audience tokens', v => Number(v))
+  .option(
+    '--diagnostic-extra-ms <ms>',
+    'After capture, keep browser open this long to collect more audience tokens',
+    (v) => Number(v),
+  )
   .action(async (cmd) => {
     const config = loadConfig({
       timeoutMs: program.opts().timeout,
@@ -103,7 +109,7 @@ program
 program
   .command('list-chats')
   .description('List my chats (1:1, group, meeting). Path B: chatsvcagg v1/updates.')
-  .option('--limit <n>', 'Max chats to return (default: all)', v => Number(v))
+  .option('--limit <n>', 'Max chats to return (default: all)', (v) => Number(v))
   .action(async (cmd) => {
     const session = loadSessionOrThrow();
     const result = await runListChats({
@@ -116,11 +122,13 @@ program
 
 program
   .command('list-messages')
-  .description('List messages in a chat OR channel. Path B: chatsvc (chat) or chatsvcagg (channel).')
+  .description(
+    'List messages in a chat OR channel. Path B: chatsvc (chat) or chatsvcagg (channel).',
+  )
   .option('--chat <id>', 'Chat thread id (mutually exclusive with --team/--channel)')
   .option('--team <uuid>', 'Team UUID (paired with --channel)')
   .option('--channel <id>', 'Channel id (paired with --team)')
-  .option('--page-size <n>', 'Page size', v => Number(v), 50)
+  .option('--page-size <n>', 'Page size', (v) => Number(v), 50)
   .action(async (cmd) => {
     const session = loadSessionOrThrow();
     const result = await runListMessages({
@@ -136,7 +144,9 @@ program
 
 program
   .command('resolve-mri <mri>')
-  .description('Resolve a Teams MRI (8:orgid:<aad-oid>) to {id, email, displayName} via Graph /users/{id}')
+  .description(
+    'Resolve a Teams MRI (8:orgid:<aad-oid>) to {id, email, displayName} via Graph /users/{id}',
+  )
   .action(async (mri: string) => {
     const session = loadSessionOrThrow();
     const result = await runResolveMri({ session, ...commonConfig(), mri });
@@ -146,7 +156,7 @@ program
 program
   .command('auth-renew')
   .description('Silently renew the Teams Bearer using the persisted browser profile (headless)')
-  .option('--timeout <ms>', 'Headless capture timeout (default 30000)', v => Number(v))
+  .option('--timeout <ms>', 'Headless capture timeout (default 30000)', (v) => Number(v))
   .action(async (cmd) => {
     const result = await runAuthRenew({
       timeoutMs: cmd.timeout,
@@ -182,7 +192,10 @@ program
 program
   .command('health-check')
   .description('Probe one read of each kind (Graph + chatsvc + chatsvcagg) and report.')
-  .option('--probe-chat-thread-id <id>', 'Use this chat thread id for the chatsvc probe instead of auto-discovering')
+  .option(
+    '--probe-chat-thread-id <id>',
+    'Use this chat thread id for the chatsvc probe instead of auto-discovering',
+  )
   .action(async (cmd) => {
     const session = loadSessionOrThrow();
     const result = await runHealthCheck({
@@ -192,7 +205,7 @@ program
     });
     writeJson(result);
     if (result.overall === 'broken') process.exit(ExitCode.Upstream);
-    if (result.overall === 'degraded') process.exit(ExitCode.Internal);  // soft alert
+    if (result.overall === 'degraded') process.exit(ExitCode.Internal); // soft alert
   });
 
 async function main(): Promise<void> {
@@ -203,10 +216,12 @@ async function main(): Promise<void> {
       process.stderr.write(JSON.stringify(e.payload) + '\n');
       process.exit(e.code);
     }
-    process.stderr.write(JSON.stringify({
-      code: 'internal',
-      message: (e as Error).message ?? String(e),
-    }) + '\n');
+    process.stderr.write(
+      JSON.stringify({
+        code: 'internal',
+        message: (e as Error).message ?? String(e),
+      }) + '\n',
+    );
     process.exit(ExitCode.Internal);
   }
 }

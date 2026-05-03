@@ -31,8 +31,8 @@ export type Scope =
 
 export interface ListMessagesResult {
   scope: Scope;
-  messages: ChatsvcMessage[];   // for chat
-  posts?: ChannelPost[];         // for channel
+  messages: ChatsvcMessage[]; // for chat
+  posts?: ChannelPost[]; // for channel
 }
 
 function validateScope(opts: ListMessagesOptions): Scope {
@@ -60,13 +60,19 @@ function validateScope(opts: ListMessagesOptions): Scope {
  * chatsvcagg channel-message reads. Cached in session.generalChannelByTeamId
  * so we only call Graph once per team.
  */
-async function generalChannelId(session: Session, httpTimeoutMs: number, teamUuid: string): Promise<string> {
+async function generalChannelId(
+  session: Session,
+  httpTimeoutMs: number,
+  teamUuid: string,
+): Promise<string> {
   const cached = session.generalChannelByTeamId?.[teamUuid];
   if (cached) return cached;
   // Ask Graph for the team's channels and find the one named 'General'.
   const graph = new GraphClient(session, { httpTimeoutMs });
-  const r = await graph.get<{ value: Channel[] }>(`/teams/${encodeURIComponent(teamUuid)}/channels`);
-  const general = r.value.find(c => c.displayName === 'General');
+  const r = await graph.get<{ value: Channel[] }>(
+    `/teams/${encodeURIComponent(teamUuid)}/channels`,
+  );
+  const general = r.value.find((c) => c.displayName === 'General');
   if (!general) {
     throw new ExitWithCode(ExitCode.Upstream, {
       code: 'upstream',

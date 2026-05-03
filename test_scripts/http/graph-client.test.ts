@@ -16,8 +16,12 @@ function mockFetch(impl: typeof globalThis.fetch): typeof globalThis.fetch {
 
 describe('GraphClient', () => {
   let originalFetch: typeof globalThis.fetch;
-  beforeEach(() => { originalFetch = globalThis.fetch; });
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
 
   it('attaches Bearer header from the session', async () => {
     let captured: Headers | undefined;
@@ -31,7 +35,13 @@ describe('GraphClient', () => {
   });
 
   it('throws AuthRequiredError on 401', async () => {
-    mockFetch(async () => new Response(JSON.stringify({ error: { code: 'InvalidAuthenticationToken', message: 'expired' } }), { status: 401 }));
+    mockFetch(
+      async () =>
+        new Response(
+          JSON.stringify({ error: { code: 'InvalidAuthenticationToken', message: 'expired' } }),
+          { status: 401 },
+        ),
+    );
     const c = new GraphClient(SESSION, { httpTimeoutMs: 1000 });
     await expect(c.get('/me')).rejects.toBeInstanceOf(AuthRequiredError);
   });
@@ -40,7 +50,10 @@ describe('GraphClient', () => {
     let calls = 0;
     mockFetch(async () => {
       calls++;
-      return new Response(JSON.stringify({ error: { code: 'ServiceUnavailable', message: 'busy' } }), { status: 503 });
+      return new Response(
+        JSON.stringify({ error: { code: 'ServiceUnavailable', message: 'busy' } }),
+        { status: 503 },
+      );
     });
     const c = new GraphClient(SESSION, { httpTimeoutMs: 1000, retries: 2, retryBaseMs: 1 });
     await expect(c.get('/me')).rejects.toBeInstanceOf(UpstreamError);
@@ -59,24 +72,33 @@ describe('GraphClient', () => {
     mockFetch(async () => {
       call++;
       if (call === 1) {
-        return new Response(JSON.stringify({
-          value: [{ id: '1' }, { id: '2' }],
-          '@odata.nextLink': 'https://graph.microsoft.com/v1.0/me/chats?$skiptoken=abc',
-        }), { status: 200 });
+        return new Response(
+          JSON.stringify({
+            value: [{ id: '1' }, { id: '2' }],
+            '@odata.nextLink': 'https://graph.microsoft.com/v1.0/me/chats?$skiptoken=abc',
+          }),
+          { status: 200 },
+        );
       }
       return new Response(JSON.stringify({ value: [{ id: '3' }] }), { status: 200 });
     });
     const c = new GraphClient(SESSION, { httpTimeoutMs: 1000 });
     const all = await c.paginate<{ id: string }>('/me/chats', { maxResults: 100 });
-    expect(all.items.map(i => i.id)).toEqual(['1', '2', '3']);
+    expect(all.items.map((i) => i.id)).toEqual(['1', '2', '3']);
     expect(all.cappedEarly).toBe(false);
   });
 
   it('paginate() respects maxResults cap', async () => {
-    mockFetch(async () => new Response(JSON.stringify({
-      value: Array.from({ length: 50 }, (_, i) => ({ id: String(i) })),
-      '@odata.nextLink': 'https://graph.microsoft.com/v1.0/x?next',
-    }), { status: 200 }));
+    mockFetch(
+      async () =>
+        new Response(
+          JSON.stringify({
+            value: Array.from({ length: 50 }, (_, i) => ({ id: String(i) })),
+            '@odata.nextLink': 'https://graph.microsoft.com/v1.0/x?next',
+          }),
+          { status: 200 },
+        ),
+    );
     const c = new GraphClient(SESSION, { httpTimeoutMs: 1000 });
     const all = await c.paginate<{ id: string }>('/x', { maxResults: 30 });
     expect(all.items.length).toBe(30);

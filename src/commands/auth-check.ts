@@ -25,7 +25,9 @@ export async function runAuthCheck(opts: AuthCheckOptions): Promise<AuthCheckRes
     try {
       const claims = decodeJwt(opts.session.bearerToken);
       if (claims.exp) tokenExpiresAt = new Date(claims.exp * 1000).toISOString();
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     return {
       status: 'ok',
       tokenExpiresAt,

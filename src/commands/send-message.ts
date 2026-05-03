@@ -17,12 +17,12 @@ import type { Session } from '../session/store';
 export interface SendMessageOptions {
   session: Session;
   httpTimeoutMs: number;
-  chat?: string;             // chat thread id
-  team?: string;             // team uuid
-  channel?: string;          // channel id
-  text?: string;             // plain text body
-  html?: string;             // HTML body (mutually exclusive with text)
-  replyTo?: string;          // for channel replies, parent message id
+  chat?: string; // chat thread id
+  team?: string; // team uuid
+  channel?: string; // channel id
+  text?: string; // plain text body
+  html?: string; // HTML body (mutually exclusive with text)
+  replyTo?: string; // for channel replies, parent message id
 }
 
 export interface SendMessageResult {
@@ -63,7 +63,7 @@ export async function runSendMessage(opts: SendMessageOptions): Promise<SendMess
 
   const body = {
     body: {
-      contentType: opts.html ? 'html' as const : 'text' as const,
+      contentType: opts.html ? ('html' as const) : ('text' as const),
       content: opts.html ?? opts.text!,
     },
   };
@@ -88,7 +88,11 @@ export async function runSendMessage(opts: SendMessageOptions): Promise<SendMess
     if (e instanceof GraphHttpError) {
       throw new ExitWithCode(ExitCode.Upstream, {
         code: 'upstream',
-        message: e.message + (hasChannel ? ' (channel sends require ChannelMessage.Send scope which is NOT in the Teams-web Graph token; this command currently only works for --chat)' : ''),
+        message:
+          e.message +
+          (hasChannel
+            ? ' (channel sends require ChannelMessage.Send scope which is NOT in the Teams-web Graph token; this command currently only works for --chat)'
+            : ''),
         status: e.status,
       });
     }

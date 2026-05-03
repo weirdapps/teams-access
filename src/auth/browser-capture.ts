@@ -1,6 +1,12 @@
 // src/auth/browser-capture.ts
 import { chromium, type BrowserContext, type Request as PWRequest } from 'playwright';
-import { writeSession, type Session, type SessionCookie, type SessionRegion, type AudienceToken } from '../session/store';
+import {
+  writeSession,
+  type Session,
+  type SessionCookie,
+  type SessionRegion,
+  type AudienceToken,
+} from '../session/store';
 import { decodeJwt } from '../session/jwt';
 import { ExitCode, ExitWithCode } from '../util/exit-codes';
 
@@ -8,7 +14,8 @@ const TEAMS_ROOT = 'https://teams.microsoft.com/';
 
 // Microsoft Graph well-known appid + audience strings.
 const GRAPH_APPID = '00000003-0000-0000-c000-000000000000';
-const GRAPH_AUD_RE = /(^|\/)(graph\.microsoft\.com|graph\.microsoft\.us|microsoftgraph\.chinacloudapi\.cn)(\/|$)/i;
+const GRAPH_AUD_RE =
+  /(^|\/)(graph\.microsoft\.com|graph\.microsoft\.us|microsoftgraph\.chinacloudapi\.cn)(\/|$)/i;
 
 export interface CaptureOptions {
   loginTimeoutMs: number;
@@ -82,10 +89,10 @@ export function isGraphAudience(aud: string | undefined): boolean {
 }
 
 interface InspectedBearer {
-  shortLine: string;       // brief line for stderr
-  jsonLine: string;        // structured JSON line for trace file
-  audience: string;        // decoded aud claim
-  hostPath: string;        // host + path for dedup
+  shortLine: string; // brief line for stderr
+  jsonLine: string; // structured JSON line for trace file
+  audience: string; // decoded aud claim
+  hostPath: string; // host + path for dedup
 }
 
 /**
@@ -105,7 +112,9 @@ function inspectBearerForLog(req: PWRequest): InspectedBearer | null {
     const claims = decodeJwt(token);
     aud = typeof claims.aud === 'string' ? claims.aud : '?';
     appid = (claims.appid as string | undefined) ?? '?';
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   let host = '?';
   let path = '?';
   let url = req.url();
@@ -113,7 +122,9 @@ function inspectBearerForLog(req: PWRequest): InspectedBearer | null {
     const u = new URL(url);
     host = u.host;
     path = u.pathname + (u.search ? '?' + u.search.slice(1).split('&').slice(0, 3).join('&') : '');
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   const method = req.method();
   const hostPath = `${method} ${host}${path}`;
   return {
@@ -135,7 +146,14 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
   // Written to ~/.teams-cli/multi-tokens.json (mode 0600) so we can probe the
   // discovered Skype/IC3/chatsvcagg/etc endpoints with the right token per
   // audience. This is the seed of Path B's multi-token session model.
-  interface CapturedToken { token: string; aud: string; appid?: string; scp?: string; exp?: number; capturedAt: string }
+  interface CapturedToken {
+    token: string;
+    aud: string;
+    appid?: string;
+    scp?: string;
+    exp?: number;
+    capturedAt: string;
+  }
   const tokensByAud = new Map<string, CapturedToken>();
   let primaryResolved = false;
 
@@ -145,11 +163,19 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
   const { join } = await import('node:path');
   const { homedir } = await import('node:os');
   const traceDir = join(process.env.HOME ?? homedir(), '.teams-cli');
-  try { mkdirSync(traceDir, { recursive: true, mode: 0o700 }); } catch { /* ignore */ }
+  try {
+    mkdirSync(traceDir, { recursive: true, mode: 0o700 });
+  } catch {
+    /* ignore */
+  }
   const tracePath = join(traceDir, 'login-trace.jsonl');
   const multiTokensPath = join(traceDir, 'multi-tokens.json');
   // Truncate any prior trace.
-  try { writeFileSync(tracePath, ''); } catch { /* ignore */ }
+  try {
+    writeFileSync(tracePath, '');
+  } catch {
+    /* ignore */
+  }
 
   try {
     context = await chromium.launchPersistentContext(opts.profileDir ?? '', {
@@ -167,14 +193,16 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
         const summary = Array.from(audiencesSeen.entries())
           .map(([aud, n]) => `  ${aud} (×${n})`)
           .join('\n');
-        reject(new ExitWithCode(ExitCode.AuthRequired, {
-          code: 'auth_required',
-          message:
-            `Login window timed out after ${opts.loginTimeoutMs}ms with no Bearer captured. ` +
-            `Distinct audiences seen during the wait:\n${summary || '  (none)'}\n` +
-            `If you see no audiences, the page hasn't loaded yet — increase --login-timeout.`,
-          audiencesSeen: Object.fromEntries(audiencesSeen.entries()),
-        }));
+        reject(
+          new ExitWithCode(ExitCode.AuthRequired, {
+            code: 'auth_required',
+            message:
+              `Login window timed out after ${opts.loginTimeoutMs}ms with no Bearer captured. ` +
+              `Distinct audiences seen during the wait:\n${summary || '  (none)'}\n` +
+              `If you see no audiences, the page hasn't loaded yet — increase --login-timeout.`,
+            audiencesSeen: Object.fromEntries(audiencesSeen.entries()),
+          }),
+        );
       }, opts.loginTimeoutMs);
 
       context!.on('request', (req) => {
@@ -182,7 +210,11 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
         const log = inspectBearerForLog(req);
         if (log) {
           // Always append the structured line to the trace file (no dedup there).
-          try { appendFileSync(tracePath, log.jsonLine + '\n'); } catch { /* ignore */ }
+          try {
+            appendFileSync(tracePath, log.jsonLine + '\n');
+          } catch {
+            /* ignore */
+          }
           // Dedup the stderr line: only print first occurrence of each unique
           // (method+host+path+audience) tuple so the user can read it.
           const dedupKey = `${log.hostPath} aud=${log.audience}`;
@@ -209,7 +241,9 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
                 exp = typeof c.exp === 'number' ? c.exp : undefined;
                 scp = typeof c.scp === 'string' ? c.scp : undefined;
                 appid = typeof c.appid === 'string' ? c.appid : undefined;
-              } catch { /* ignore */ }
+              } catch {
+                /* ignore */
+              }
               tokensByAud.set(log.audience, {
                 token: tok,
                 aud: log.audience,
@@ -222,16 +256,27 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
               // login leaves us with whatever tokens were collected. Atomic
               // write via temp+rename to avoid torn reads.
               try {
-                const payload: Record<string, { token: string; appid?: string; scp?: string; exp?: number; capturedAt: string }> = {};
+                const payload: Record<
+                  string,
+                  { token: string; appid?: string; scp?: string; exp?: number; capturedAt: string }
+                > = {};
                 for (const [aud, t] of tokensByAud.entries()) {
-                  payload[aud] = { token: t.token, appid: t.appid, scp: t.scp, exp: t.exp, capturedAt: t.capturedAt };
+                  payload[aud] = {
+                    token: t.token,
+                    appid: t.appid,
+                    scp: t.scp,
+                    exp: t.exp,
+                    capturedAt: t.capturedAt,
+                  };
                 }
                 const tmpPath = `${multiTokensPath}.tmp`;
                 writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
                 chmodSync(tmpPath, 0o600);
                 const { renameSync } = require('node:fs');
                 renameSync(tmpPath, multiTokensPath);
-                process.stderr.write(`[multi-tokens] +${log.audience} (now have ${tokensByAud.size} audiences)\n`);
+                process.stderr.write(
+                  `[multi-tokens] +${log.audience} (now have ${tokensByAud.size} audiences)\n`,
+                );
               } catch (e) {
                 process.stderr.write(`[multi-tokens] WARN write failed: ${(e as Error).message}\n`);
               }
@@ -248,16 +293,24 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
           const graphAud = Array.from(tokensByAud.keys()).find(isGraphAudience);
           if (graphAud) {
             const t = tokensByAud.get(graphAud)!;
-            process.stderr.write(`[accepted] aud=${graphAud} (preferred Graph over ${info.aud}) scp=${t.scp ?? '(none)'}\n`);
+            process.stderr.write(
+              `[accepted] aud=${graphAud} (preferred Graph over ${info.aud}) scp=${t.scp ?? '(none)'}\n`,
+            );
             primaryResolved = true;
             clearTimeout(timer);
             resolve({
               bearerToken: t.token,
-              upn: info.upn, oid: info.oid, tid: info.tid,
-              aud: graphAud, appid: t.appid, scp: t.scp,
+              upn: info.upn,
+              oid: info.oid,
+              tid: info.tid,
+              aud: graphAud,
+              appid: t.appid,
+              scp: t.scp,
             });
           } else {
-            process.stderr.write(`[accepted] aud=${info.aud} appid=${info.appid} scp=${info.scp ?? '(none)'}\n`);
+            process.stderr.write(
+              `[accepted] aud=${info.aud} appid=${info.appid} scp=${info.scp ?? '(none)'}\n`,
+            );
             primaryResolved = true;
             clearTimeout(timer);
             resolve(info);
@@ -269,10 +322,14 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
     const page = await context.newPage();
     await page.goto(TEAMS_ROOT);
     process.stderr.write(`[teams-cli login] navigated to ${TEAMS_ROOT}\n`);
-    process.stderr.write(`[teams-cli login] waiting for a Graph-audience Bearer (timeout ${opts.loginTimeoutMs}ms)\n`);
+    process.stderr.write(
+      `[teams-cli login] waiting for a Graph-audience Bearer (timeout ${opts.loginTimeoutMs}ms)\n`,
+    );
     process.stderr.write(`[teams-cli login] full request trace: ${tracePath}\n`);
     if (!opts.headless) {
-      process.stderr.write(`[teams-cli login] HINT: open a chat AND scroll its history. That triggers the chat-list and chat-message endpoints we want to discover.\n`);
+      process.stderr.write(
+        `[teams-cli login] HINT: open a chat AND scroll its history. That triggers the chat-list and chat-message endpoints we want to discover.\n`,
+      );
     }
 
     // In headless mode, the Teams SPA doesn't auto-navigate, so the user-clicks
@@ -324,45 +381,68 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
     // For now, surface a hint to the user if Graph token wasn't captured.
     const hasGraph = Array.from(tokensByAud.keys()).some(isGraphAudience);
     if (!hasGraph) {
-      process.stderr.write(`[teams-cli login] WARNING: no Graph-audience token was captured. ` +
-        `Commands that use Microsoft Graph (list-teams, list-channels, send-message, auth-check) will fail with 401. ` +
-        `To get a Graph token, click the Calendar tab or Files tab in Teams web while the diagnostic window is open.\n`);
+      process.stderr.write(
+        `[teams-cli login] WARNING: no Graph-audience token was captured. ` +
+          `Commands that use Microsoft Graph (list-teams, list-channels, send-message, auth-check) will fail with 401. ` +
+          `To get a Graph token, click the Calendar tab or Files tab in Teams web while the diagnostic window is open.\n`,
+      );
     }
-    process.stderr.write(`[teams-cli login] tokens captured so far: ${Array.from(tokensByAud.keys()).join(', ')}\n`);
+    process.stderr.write(
+      `[teams-cli login] tokens captured so far: ${Array.from(tokensByAud.keys()).join(', ')}\n`,
+    );
 
     // Optional diagnostic window: keep listening (and logging) for additional
     // ms after Graph token accept, so the user can interact with Teams (open
     // a chat, scroll history) and we capture URL+audience tuples for the
     // ic3 / chatsvcagg endpoints that didn't fire in the initial burst.
     if (opts.diagnosticExtraMs && opts.diagnosticExtraMs > 0) {
-      process.stderr.write(`[teams-cli login] Graph token captured. Diagnostic window: ${opts.diagnosticExtraMs}ms (keep clicking around in Teams — open a chat, scroll history)\n`);
-      await new Promise(r => setTimeout(r, opts.diagnosticExtraMs));
+      process.stderr.write(
+        `[teams-cli login] Graph token captured. Diagnostic window: ${opts.diagnosticExtraMs}ms (keep clicking around in Teams — open a chat, scroll history)\n`,
+      );
+      await new Promise((r) => setTimeout(r, opts.diagnosticExtraMs));
       process.stderr.write(`[teams-cli login] diagnostic window over\n`);
     }
 
-    process.stderr.write(`[teams-cli login] trace summary (unique audience × method+host+path tuples):\n`);
+    process.stderr.write(
+      `[teams-cli login] trace summary (unique audience × method+host+path tuples):\n`,
+    );
     for (const k of Array.from(seenHostPathAud).sort()) {
       process.stderr.write(`  ${k}\n`);
     }
-    process.stderr.write(`[teams-cli login] full trace at ${tracePath} — ${Array.from(seenHostPathAud).length} unique tuples / ${Array.from(audiencesSeen.values()).reduce((a, b) => a + b, 0)} total Bearer requests\n`);
+    process.stderr.write(
+      `[teams-cli login] full trace at ${tracePath} — ${Array.from(seenHostPathAud).length} unique tuples / ${Array.from(audiencesSeen.values()).reduce((a, b) => a + b, 0)} total Bearer requests\n`,
+    );
 
     // Write the multi-audience token map for Path B probing / future use.
     if (tokensByAud.size > 0) {
-      const payload: Record<string, { token: string; appid?: string; scp?: string; exp?: number; capturedAt: string }> = {};
+      const payload: Record<
+        string,
+        { token: string; appid?: string; scp?: string; exp?: number; capturedAt: string }
+      > = {};
       for (const [aud, t] of tokensByAud.entries()) {
-        payload[aud] = { token: t.token, appid: t.appid, scp: t.scp, exp: t.exp, capturedAt: t.capturedAt };
+        payload[aud] = {
+          token: t.token,
+          appid: t.appid,
+          scp: t.scp,
+          exp: t.exp,
+          capturedAt: t.capturedAt,
+        };
       }
       try {
         writeFileSync(multiTokensPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
         chmodSync(multiTokensPath, 0o600);
-        process.stderr.write(`[teams-cli login] multi-audience token map written to ${multiTokensPath} (${tokensByAud.size} audiences, mode 0600)\n`);
+        process.stderr.write(
+          `[teams-cli login] multi-audience token map written to ${multiTokensPath} (${tokensByAud.size} audiences, mode 0600)\n`,
+        );
       } catch (e) {
-        process.stderr.write(`[teams-cli login] WARN: could not write multi-tokens file: ${(e as Error).message}\n`);
+        process.stderr.write(
+          `[teams-cli login] WARN: could not write multi-tokens file: ${(e as Error).message}\n`,
+        );
       }
     }
 
     const pwCookies = await context.cookies();
-    const cookies: SessionCookie[] = pwCookies.map(c => ({
+    const cookies: SessionCookie[] = pwCookies.map((c) => ({
       name: c.name,
       value: c.value,
       domain: c.domain,
@@ -405,7 +485,8 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       if (!region.chatsvc && (m = tuple.match(/\/api\/chatsvc\/([^\/]+)\//))) region.chatsvc = m[1];
       if (!region.csa && (m = tuple.match(/\/api\/csa\/([^\/]+)\//))) region.csa = m[1];
       if (!region.mt && (m = tuple.match(/\/api\/mt\/part\/([^\/]+)\//))) region.mt = m[1];
-      if (!region.asyncgw && (m = tuple.match(/^\S+\s+([\w-]+)\.asyncgw\.teams\.microsoft\.com/))) region.asyncgw = m[1];
+      if (!region.asyncgw && (m = tuple.match(/^\S+\s+([\w-]+)\.asyncgw\.teams\.microsoft\.com/)))
+        region.asyncgw = m[1];
     }
     process.stderr.write(`[teams-cli login] detected region: ${JSON.stringify(region)}\n`);
 

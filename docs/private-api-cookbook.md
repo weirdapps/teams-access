@@ -39,6 +39,7 @@ jq -r '"\(.aud) | \(.method) \(.host)\(.path[0:120])"' \
 ```
 
 Compare to what's coded in `src/http/chatsvc-client.ts` and `src/http/chatsvcagg-client.ts`. Look for:
+
 - New URL paths with familiar audiences (Microsoft moved the endpoint)
 - New audience claims you've never seen (Microsoft introduced a new service)
 - Different region segments (`emea` → something else)
@@ -62,6 +63,7 @@ If 200, you've found the replacement URL. Update the client code (one constant a
 ## Step 3: when headers are the issue
 
 Sometimes the same URL returns 200 from Teams web but 500 from our curl, even with identical Bearer + audience. That means Teams web is sending an additional header we're not. Common culprits:
+
 - `x-ms-correlation-id`: random UUID per request
 - `x-ms-scenario-id`: scenario tracking
 - `behavioroverride: redirectAs404`: server behavior toggle
@@ -113,6 +115,7 @@ Future: an `auth-check --verbose` mode that reports the expiry of every audience
 ## Telemetry to add later
 
 Eventually we should:
+
 - Add a launchd plist that runs `teams-cli health-check` daily and writes results to a log
 - Set up a macOS notification when a probe transitions from green → red
 - Optionally email a digest weekly so the user notices drift before they need the broken command

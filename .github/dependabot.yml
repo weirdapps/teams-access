@@ -1,42 +1,42 @@
 version: 2
 updates:
-  - package-ecosystem: "npm"
-    directory: "/"
+  - package-ecosystem: 'npm'
+    directory: '/'
     schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
+      interval: 'weekly'
+      day: 'monday'
+      time: '09:00'
     open-pull-requests-limit: 5
     reviewers:
-      - "weirdapps"
+      - 'weirdapps'
     assignees:
-      - "weirdapps"
+      - 'weirdapps'
     labels:
-      - "dependencies"
-      - "security"
+      - 'dependencies'
+      - 'security'
     commit-message:
-      prefix: "deps"
-      include: "scope"
+      prefix: 'deps'
+      include: 'scope'
     groups:
       development-dependencies:
-        dependency-type: "development"
+        dependency-type: 'development'
         update-types:
-          - "minor"
-          - "patch"
+          - 'minor'
+          - 'patch'
       production-dependencies:
-        dependency-type: "production"
+        dependency-type: 'production'
         update-types:
-          - "minor"
-          - "patch"
-  - package-ecosystem: "github-actions"
-    directory: "/"
+          - 'minor'
+          - 'patch'
+  - package-ecosystem: 'github-actions'
+    directory: '/'
     schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
+      interval: 'weekly'
+      day: 'monday'
+      time: '09:00'
     labels:
-      - "dependencies"
-      - "ci"
+      - 'dependencies'
+      - 'ci'
     commit-message:
-      prefix: "ci"
-      include: "scope"
+      prefix: 'ci'
+      include: 'scope'

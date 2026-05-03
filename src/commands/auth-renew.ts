@@ -111,7 +111,7 @@ export async function runAuthRenew(opts: AuthRenewOptions = {}): Promise<AuthRen
   // SPA redesign that stops loading chatsvcagg on the chat URL) silently
   // produces a session that looks fine but fails on first real use.
   const capturedAudiences = Object.keys(captured.tokens ?? {});
-  const missing = REQUIRED_AUDIENCES.filter(aud => !capturedAudiences.includes(aud));
+  const missing = REQUIRED_AUDIENCES.filter((aud) => !capturedAudiences.includes(aud));
   if (missing.length > 0) {
     throw new ExitWithCode(ExitCode.AuthRequired, {
       code: 'auth_renew_incomplete',
