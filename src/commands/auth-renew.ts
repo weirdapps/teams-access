@@ -5,7 +5,7 @@
 // opening a visible browser window.
 //
 // Works while the device-trust cookie (ESTSAUTHPERSISTENT, ~90 days) is
-// alive. When that cookie expires or NBG forces re-MFA, this command fails
+// alive. When that cookie expires or tenant policy forces re-MFA, this command fails
 // and the caller must run `teams-cli login` interactively.
 //
 // Mirrors outlook-cli's auth-renew (commands/auth-renew.ts in outlook-access).
@@ -93,7 +93,7 @@ export async function runAuthRenew(opts: AuthRenewOptions = {}): Promise<AuthRen
     });
   } catch (err) {
     // Headless renewal failed. Most likely cause: ESTSAUTHPERSISTENT cookie
-    // expired or NBG forced re-MFA. Caller must run interactive login.
+    // expired or tenant policy forced re-MFA. Caller must run interactive login.
     const msg = err instanceof Error ? err.message : String(err);
     throw new ExitWithCode(ExitCode.AuthRequired, {
       code: 'auth_renew_failed',

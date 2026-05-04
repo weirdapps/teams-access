@@ -22,7 +22,7 @@ Sister project to [`outlook-cli`](https://github.com/weirdapps/outlook-access). 
 
 ## Why this approach (Path B)
 
-The original plan was to drive everything via Microsoft Graph. The spike (see `docs/spike-results.md`) found that the Teams web client's Graph token, on a typical NBG-style tenant, does **not** carry the scopes Microsoft Graph requires for `Chat.Read*` or `ChannelMessage.Read.All`. Graph rejects those calls with 403.
+The original plan was to drive everything via Microsoft Graph. The spike (see `docs/spike-results.md`) found that the Teams web client's Graph token, on an enterprise tenant with restrictive scope policies, does **not** carry the scopes Microsoft Graph requires for `Chat.Read*` or `ChannelMessage.Read.All`. Graph rejects those calls with 403.
 
 But Teams web itself reads chats and channels constantly — it just uses _different_ services with _different_ audience-bound tokens:
 
