@@ -136,4 +136,4 @@ npm run test:watch
 
 ## License
 
-ISC.
+MIT — see [LICENSE](./LICENSE).
