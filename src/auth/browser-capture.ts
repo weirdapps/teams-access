@@ -1,5 +1,5 @@
 // src/auth/browser-capture.ts
-import { chromium, type BrowserContext, type Request as PWRequest } from 'playwright';
+import type { BrowserContext, Request as PWRequest } from 'playwright';
 import {
   writeSession,
   type Session,
@@ -136,6 +136,7 @@ function inspectBearerForLog(req: PWRequest): InspectedBearer | null {
 }
 
 export async function captureSession(opts: CaptureOptions): Promise<Session> {
+  const { chromium } = await import('playwright');
   let context: BrowserContext | undefined;
   // Track distinct audiences seen so we can give a useful diagnostic on timeout.
   const audiencesSeen = new Map<string, number>();

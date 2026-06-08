@@ -5,7 +5,6 @@ import { loadConfig } from './config/load';
 import { readSession, type Session } from './session/store';
 import { writeJson } from './output/json';
 import { ExitCode, ExitWithCode } from './util/exit-codes';
-import { runLogin } from './commands/login';
 import { runAuthCheck } from './commands/auth-check';
 import { runListTeams } from './commands/list-teams';
 import { runListChannels } from './commands/list-channels';
@@ -14,7 +13,6 @@ import { runListMessages } from './commands/list-messages';
 import { runSendMessage } from './commands/send-message';
 import { runHealthCheck } from './commands/health-check';
 import { runResolveMri } from './commands/resolve-mri';
-import { runAuthRenew } from './commands/auth-renew';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -59,6 +57,7 @@ program
     (v) => Number(v),
   )
   .action(async (cmd) => {
+    const { runLogin } = await import('./commands/login');
     const config = loadConfig({
       timeoutMs: program.opts().timeout,
       loginTimeoutMs: program.opts().loginTimeout,
@@ -158,6 +157,7 @@ program
   .description('Silently renew the Teams Bearer using the persisted browser profile (headless)')
   .option('--timeout <ms>', 'Headless capture timeout (default 30000)', (v) => Number(v))
   .action(async (cmd) => {
+    const { runAuthRenew } = await import('./commands/auth-renew');
     const result = await runAuthRenew({
       timeoutMs: cmd.timeout,
       chromeChannel: program.opts().chromeChannel,
