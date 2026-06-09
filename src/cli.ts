@@ -56,6 +56,11 @@ program
     'After capture, keep browser open this long to collect more audience tokens',
     (v) => Number(v),
   )
+  .option(
+    '--min-audiences <n>',
+    'Wait until at least N distinct audience tokens are captured before closing (default: 1)',
+    (v) => Number(v),
+  )
   .action(async (cmd) => {
     const { runLogin } = await import('./commands/login');
     const config = loadConfig({
@@ -67,6 +72,7 @@ program
       config,
       profileDir: join(process.env.HOME ?? homedir(), '.teams-cli', 'playwright-profile'),
       diagnosticExtraMs: cmd.diagnosticExtraMs,
+      minAudiences: cmd.minAudiences,
     });
     writeJson(result);
   });

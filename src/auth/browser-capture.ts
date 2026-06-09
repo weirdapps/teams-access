@@ -22,6 +22,14 @@ export interface CaptureOptions {
   chromeChannel: string;
   profileDir?: string;
   /**
+   * Minimum number of distinct audience tokens to capture before resolving.
+   * Default is 1 (resolve on first Bearer). Set higher on headless VPS
+   * environments where MCAS proxies trickle tokens across multiple navigations.
+   * The browser stays open (collecting tokens) until this count is reached or
+   * loginTimeoutMs expires — whichever comes first.
+   */
+  minAudiences?: number;
+  /**
    * When set (>0), after a Graph token is accepted, the browser remains open
    * for this many additional milliseconds. This window is used purely for
    * diagnostic capture — we keep logging every Bearer the page requests, so
@@ -287,8 +295,20 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
         // Path B accept: take the FIRST Bearer of any audience, prefer Graph
         // if it shows up early. Once resolved, additional Bearers continue to
         // be collected into tokensByAud (above) for the diagnostic window.
+        //
+        // minAudiences gate: when set > 1, delay resolution until we have
+        // captured at least that many distinct audience tokens. This is needed
+        // on VPS/headless environments where MCAS proxies deliver tokens one
+        // at a time across multiple navigation steps.
+        const minAud = opts.minAudiences ?? 1;
         const info = extractBearerFromRequest(req);
         if (info && !primaryResolved) {
+          if (tokensByAud.size < minAud) {
+            process.stderr.write(
+              `[waiting] aud=${info.aud} (${tokensByAud.size}/${minAud} audiences — need more)\n`,
+            );
+            return;
+          }
           // If the first-seen token isn't Graph but Graph is already in
           // tokensByAud (rare but possible due to async), prefer Graph.
           const graphAud = Array.from(tokensByAud.keys()).find(isGraphAudience);

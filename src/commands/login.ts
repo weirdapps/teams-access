@@ -6,6 +6,7 @@ export interface LoginOptions {
   config: Config;
   profileDir?: string;
   diagnosticExtraMs?: number;
+  minAudiences?: number;
 }
 
 export interface LoginResult {
@@ -19,6 +20,7 @@ export async function runLogin(opts: LoginOptions): Promise<LoginResult> {
     chromeChannel: opts.config.chromeChannel,
     profileDir: opts.profileDir,
     diagnosticExtraMs: opts.diagnosticExtraMs,
+    minAudiences: opts.minAudiences,
   });
   return {
     status: 'ok',
