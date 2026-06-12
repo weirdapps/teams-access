@@ -1,5 +1,10 @@
 # teams-cli
 
+[![CI](https://github.com/weirdapps/teams-access/actions/workflows/ci.yml/badge.svg)](https://github.com/weirdapps/teams-access/actions/workflows/ci.yml)
+[![SonarCloud](https://sonarcloud.io/api/project_badges/measure?project=weirdapps_teams-access&metric=alert_status)](https://sonarcloud.io/project/overview?id=weirdapps_teams-access)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js >=20](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org/)
+
 A TypeScript command-line tool for Microsoft Teams. Reads chats and channels via private Teams APIs (no admin consent needed); sends chat messages via Microsoft Graph (using the delegated scope Teams web itself acquires).
 
 Sister project to [`outlook-cli`](https://github.com/weirdapps/outlook-access). Same auth pattern (snoop the Bearer your browser session uses), same exit codes, same "no app registration" promise.
