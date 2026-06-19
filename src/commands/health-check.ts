@@ -7,7 +7,6 @@
 import { GraphClient } from '../http/graph-client';
 import { ChatsvcClient } from '../http/chatsvc-client';
 import { ChatsvcaggClient } from '../http/chatsvcagg-client';
-import { ExitCode, ExitWithCode } from '../util/exit-codes';
 import type { Session } from '../session/store';
 
 export interface HealthCheckOptions {

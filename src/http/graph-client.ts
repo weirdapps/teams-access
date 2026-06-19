@@ -105,7 +105,9 @@ export class GraphClient {
           let msg = 'unauthenticated';
           try {
             msg = ((await res.json()) as GraphErrorBody).error?.message ?? msg;
-          } catch {}
+          } catch {
+            /* ignore — keep default 'unauthenticated' message */
+          }
           throw new AuthRequiredError(msg, requestId);
         }
         if (res.status >= 200 && res.status < 300) {
@@ -115,7 +117,9 @@ export class GraphClient {
         let body: GraphErrorBody = {};
         try {
           body = (await res.json()) as GraphErrorBody;
-        } catch {}
+        } catch {
+          /* ignore — fall back to empty body */
+        }
         const code = body.error?.code ?? `HTTP_${res.status}`;
         const message = body.error?.message ?? `HTTP ${res.status}`;
         if (isRetryable(res.status) && attempt < this.retries) {

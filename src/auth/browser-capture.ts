@@ -168,7 +168,8 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
 
   // Open the trace file. Each Bearer-bearing request appends one JSON line.
   // Path is fixed under ~/.teams-cli/ so subsequent debug runs can grep it.
-  const { writeFileSync, appendFileSync, mkdirSync, chmodSync } = await import('node:fs');
+  const { writeFileSync, appendFileSync, mkdirSync, chmodSync, renameSync } =
+    await import('node:fs');
   const { join } = await import('node:path');
   const { homedir } = await import('node:os');
   const traceDir = join(process.env.HOME ?? homedir(), '.teams-cli');
@@ -281,7 +282,6 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
                 const tmpPath = `${multiTokensPath}.tmp`;
                 writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
                 chmodSync(tmpPath, 0o600);
-                const { renameSync } = require('node:fs');
                 renameSync(tmpPath, multiTokensPath);
                 process.stderr.write(
                   `[multi-tokens] +${log.audience} (now have ${tokensByAud.size} audiences)\n`,
@@ -503,9 +503,9 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
     for (const tuple of seenHostPathAud) {
       // tuple: "<METHOD> <host><path> aud=<aud>"
       let m: RegExpMatchArray | null;
-      if (!region.chatsvc && (m = tuple.match(/\/api\/chatsvc\/([^\/]+)\//))) region.chatsvc = m[1];
-      if (!region.csa && (m = tuple.match(/\/api\/csa\/([^\/]+)\//))) region.csa = m[1];
-      if (!region.mt && (m = tuple.match(/\/api\/mt\/part\/([^\/]+)\//))) region.mt = m[1];
+      if (!region.chatsvc && (m = tuple.match(/\/api\/chatsvc\/([^/]+)\//))) region.chatsvc = m[1];
+      if (!region.csa && (m = tuple.match(/\/api\/csa\/([^/]+)\//))) region.csa = m[1];
+      if (!region.mt && (m = tuple.match(/\/api\/mt\/part\/([^/]+)\//))) region.mt = m[1];
       if (!region.asyncgw && (m = tuple.match(/^\S+\s+([\w-]+)\.asyncgw\.teams\.microsoft\.com/)))
         region.asyncgw = m[1];
     }

@@ -8,7 +8,7 @@ const UNIT_MS: Record<string, number> = {
 };
 
 const DURATION_RE = /^(\d+)([mhdw])$/;
-const NOW_OFFSET_RE = /^now\s*([+\-])\s*(\d+)([mhdw])$/;
+const NOW_OFFSET_RE = /^now\s*([+-])\s*(\d+)([mhdw])$/;
 
 export function parseRelativeTime(input: string): Date {
   const s = input.trim();

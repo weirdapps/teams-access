@@ -132,7 +132,9 @@ export class ChatsvcClient {
           let msg = 'unauthenticated';
           try {
             msg = (await res.text()).slice(0, 200);
-          } catch {}
+          } catch {
+            /* ignore — keep default 'unauthenticated' message */
+          }
           throw new AuthRequiredError(msg, requestId);
         }
         if (res.status >= 200 && res.status < 300) {
@@ -142,7 +144,9 @@ export class ChatsvcClient {
         let bodyText = '';
         try {
           bodyText = await res.text();
-        } catch {}
+        } catch {
+          /* ignore — fall back to empty body */
+        }
         const code = `HTTP_${res.status}`;
         const message = bodyText.slice(0, 200) || `HTTP ${res.status}`;
         if (isRetryable(res.status) && attempt < this.retries) {
