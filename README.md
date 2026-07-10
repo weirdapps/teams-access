@@ -63,7 +63,7 @@ The `teams-bridge` MCP server (in the `chat` plugin of [`plessas-marketplace`](h
 ## Auth flow
 
 ```mermaid
-flowchart LR
+flowchart TD
   U[User] --> LOGIN[teams-cli login]
   LOGIN --> PW[Playwright<br/>Chrome/Edge window]
   PW --> TEAMS[teams.microsoft.com]
