@@ -378,6 +378,16 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       void (async () => {
         for (const { url, settleMs } of [
           { url: 'https://teams.microsoft.com/v2/?view=Chat', settleMs: 7000 },
+          //   2. m365.cloud.microsoft — the M365 home reliably provokes a
+          //      graph.microsoft.com token (fetches /me, /me/photo, insights on
+          //      load). The other surfaces capture chatsvcagg / outlook /
+          //      presence but frequently MISS Graph, which left auth-renew
+          //      returning "graph audience missing" and the teams sentinel stuck
+          //      (multi-day outage). Verified empirically: this surface yields a
+          //      Graph Bearer headless within ~10s. Ordered right after Chat so
+          //      BOTH required audiences (chatsvcagg + graph) are captured early
+          //      — within the token-sync's 30s auth-renew timeout budget.
+          { url: 'https://m365.cloud.microsoft/', settleMs: 12000 },
           { url: 'https://outlook.office.com/', settleMs: 5000 },
           { url: 'https://www.office.com/', settleMs: 5000 },
         ]) {

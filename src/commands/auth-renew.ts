@@ -22,9 +22,14 @@ import { ExitCode, ExitWithCode } from '../util/exit-codes';
  *  Graph + chatsvcagg + outlook + presence audience captures; needs ~60s
  *  headroom (chat panel init alone takes ~7s). */
 const DEFAULT_RENEW_TIMEOUT_MS = 90_000;
-/** After Graph token captured, keep listening this long for additional
- *  audiences to land (chatsvcagg, ic3, etc). */
-const DEFAULT_DIAGNOSTIC_EXTRA_MS = 15_000;
+/** Keep the headless browser open this long after the FIRST bearer so the
+ *  slower surfaces finish and their audiences land. The M365 home
+ *  (m365.cloud.microsoft) fires its graph.microsoft.com call ~20s after that
+ *  nav — with the old 15s window the context closed first and Graph was
+ *  perpetually missed (the multi-day "graph audience missing" outage). 40s
+ *  clears M365's Graph fetch with margin; it's headless, so the extra wall-clock
+ *  is invisible. */
+const DEFAULT_DIAGNOSTIC_EXTRA_MS = 40_000;
 
 /**
  * Audiences that downstream commands actually need. Renewal is considered
