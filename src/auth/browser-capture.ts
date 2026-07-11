@@ -1,6 +1,7 @@
 // src/auth/browser-capture.ts
 import type { BrowserContext, Request as PWRequest } from 'playwright';
 import {
+  readSession,
   writeSession,
   type Session,
   type SessionCookie,
@@ -484,8 +485,15 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       sameSite: c.sameSite as 'Strict' | 'Lax' | 'None' | undefined,
     }));
 
-    // Build the multi-audience token map for the session.
-    const tokens: Record<string, AudienceToken> = {};
+    // Build the multi-audience token map for the session. Seed from the PRIOR
+    // session so an audience not re-observed this run keeps its last-known token
+    // instead of being dropped. Graph is captured only flakily headless (Teams
+    // mints it on M365-home load — see the nav list above); without this seed a
+    // single miss would clobber a still-valid Graph token and 401 every
+    // Graph-backed command until the next lucky capture. This run's fresh
+    // captures (loop below) overwrite the seeded entries, so newer always wins.
+    const priorTokens = readSession()?.tokens ?? {};
+    const tokens: Record<string, AudienceToken> = { ...priorTokens };
     for (const [aud, t] of tokensByAud.entries()) {
       tokens[aud] = {
         bearerToken: t.token,
@@ -521,8 +529,13 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
     }
     process.stderr.write(`[teams-cli login] detected region: ${JSON.stringify(region)}\n`);
 
+    // Primary bearer = the Graph token (by design). Prefer whatever Graph token
+    // is now in the map — freshly captured OR preserved from the prior session —
+    // over info.bearerToken, which is merely the FIRST audience seen this run
+    // (often skype/chatsvc) and useless for Graph calls.
+    const graphToken = tokens['https://graph.microsoft.com'];
     const session: Session = {
-      bearerToken: info.bearerToken,
+      bearerToken: graphToken?.bearerToken ?? info.bearerToken,
       cookies,
       capturedAt: new Date().toISOString(),
       account: { upn: info.upn, oid: info.oid, tid: info.tid },
