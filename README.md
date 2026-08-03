@@ -21,7 +21,7 @@ Sister project: [`outlook-access`](https://github.com/weirdapps/outlook-access) 
 ## Who it is for
 
 - Developers building integrations that need read access to a real Teams inbox and send access to chats, without waiting for their tenant admin to consent to a first-party app
-- The `teams-bridge` MCP server bundled inside the `chat` plugin of [`plessas-marketplace`](https://github.com/weirdapps/plessas-marketplace), which shells out to `node dist/cli.js` from this repo. Building this repo is the prerequisite for the MCP wrapper
+- The `teams-bridge` MCP server bundled inside the `chat` plugin of [`plessas-marketplace`](https://github.com/weirdapps/plessas-marketplace), which installs this repo as a pinned git dependency and shells out to the `teams-cli/dist/cli.js` inside its own `node_modules`
 
 ## CLI commands
 
@@ -30,7 +30,7 @@ Ten subcommands, all listed by `teams-cli --help`:
 | Command         | Backend                                | Purpose                                                       |
 | --------------- | -------------------------------------- | ------------------------------------------------------------- |
 | `login`         | Playwright capture                     | Interactive sign-in, persists per-audience Bearers            |
-| `auth-check`    | Graph `/me`                            | Verify the cached session is still accepted                   |
+| `auth-check`    | Graph `/me`                            | Graph token only. See the caveat below before trusting it     |
 | `auth-renew`    | Playwright headless                    | Silent re-issue against the persisted profile                 |
 | `list-teams`    | Graph `/me/joinedTeams`                | Teams you belong to                                           |
 | `list-channels` | Graph `/teams/{id}/channels`           | Single team (`--team-id`) or fan out (`--all-teams`)          |
@@ -40,7 +40,26 @@ Ten subcommands, all listed by `teams-cli --help`:
 | `send-message`  | Graph `POST /chats/{id}/messages`      | Send to a chat. Channel sends fail (scope missing)            |
 | `health-check`  | one probe per client                   | Graph + chatsvc + chatsvcagg. Exit 5 on broken, 1 on degraded |
 
-All subcommands accept the global flags `--timeout <ms>`, `--login-timeout <ms>`, `--chrome-channel <name>`, and `--no-auto-reauth`.
+All subcommands accept the global flags `--timeout <ms>`, `--login-timeout <ms>`, and `--chrome-channel <name>`. `--login-timeout` only affects `login`. The CLI also accepts `--no-auto-reauth`, but that flag is currently a no-op: no auto-reauth is implemented, and every command fails with `auth_required` (exit 4) on an expired session rather than reopening a browser.
+
+### `auth-check` is not a session-wide liveness check
+
+`auth-check` probes Microsoft Graph `/me` and nothing else. The Graph, `chatsvc`, `chatsvcagg`, and IC3 audiences are separate tokens with independent lifetimes, so `auth-check` reports `status: ok` with exit 0 while `list-messages` is already failing with a 401. A real session observed in this state:
+
+```console
+$ teams-cli auth-check
+{"status":"ok","tokenExpiresAt":"...","account":{...}}      # exit 0
+
+$ teams-cli health-check
+{"overall":"degraded","probes":[
+  {"name":"graph_me","ok":true,...},
+  {"name":"graph_joined_teams","ok":true,...},
+  {"name":"chatsvcagg_updates","ok":true,...},
+  {"name":"chatsvc_messages","ok":false,"detail":"Graph 401 Unauthenticated: ..."}
+]}                                                          # exit 1
+```
+
+Use `health-check` whenever you need to know whether the session actually works. It probes all four reads and is the only command that can fail on a dead `chatsvc` or `chatsvcagg` token. Treat `auth-check` as "is the Graph token alive", nothing more.
 
 ## MCP tools
 
@@ -99,9 +118,11 @@ npm run build
 - Run directly: `node dist/cli.js <command>`
 - Link globally: `npm link`, then use `teams-cli <command>`
 
+Nothing puts `teams-cli` on your `PATH` automatically. The `bin` entry in `package.json` only takes effect after `npm link` or a global install of this checkout, so a plain `git clone && npm install && npm run build` leaves you with `node dist/cli.js` as the only working invocation. Examples elsewhere in this README and in `docs/` write the short `teams-cli <command>` form; substitute `node dist/cli.js <command>` if you have not linked.
+
 The `prepare` script auto-builds on `npm install` when a `src/` directory is present, so end users who install this as a git dependency get a compiled binary without an extra step.
 
-To use it as the backend of the `teams-bridge` MCP server, install the `chat` plugin from [`plessas-marketplace`](https://github.com/weirdapps/plessas-marketplace) after building this repo. The plugin locates `node dist/cli.js` at the absolute path of this checkout.
+To use it as the backend of the `teams-bridge` MCP server, install the `chat` plugin from [`plessas-marketplace`](https://github.com/weirdapps/plessas-marketplace). The plugin declares `teams-cli` as a git dependency pinned to a commit of this repo and compiles it via the `prepare` script, so it neither uses nor needs a local clone. It resolves `teams-cli/dist/cli.js` out of its own `node_modules` and only falls back to a bare `teams-cli` PATH lookup for legacy setups installed with `npm link`.
 
 ## First use
 
@@ -162,6 +183,11 @@ Additional `login` flags:
 - `--diagnostic-extra-ms <ms>`: keep the browser open this many extra milliseconds after the first Bearer, to collect more audience tokens
 - `--min-audiences <n>`: wait until at least N distinct audiences have been captured before closing the browser (default 1). Useful on headless VPS environments where an MCAS proxy trickles tokens across navigations
 
+Additional subcommand flags:
+
+- `health-check --probe-chat-thread-id <id>`: use a known chat thread for the `chatsvc_messages` probe instead of auto-discovering one from the chat list. Without it, the probe is reported as failed with `skipped` in its detail when no chat can be discovered
+- `auth-renew --timeout <ms>`: headless capture timeout (default 30000). This is a subcommand flag and shadows the global `--timeout` when placed after `auth-renew`
+
 ## Session file
 
 `~/.teams-cli/session.json` (mode 0600 inside a mode 0700 directory, atomic temp+rename writes, never logged):
@@ -215,6 +241,8 @@ On failure, a single-line JSON error payload is written to stderr, for example `
 - `src/session/store.ts`: atomic writes, 0600 permissions, per-audience token map
 - `src/session/jwt.ts`: header-agnostic base64url JWT decoder used to inspect captured tokens
 - `src/util/exit-codes.ts`: single canonical exit-code table shared by every command
+- `scripts/pii-gauntlet.sh`: tracked-file PII scan, wired into both pre-commit and CI
+- `test_scripts/`: vitest suites, mirroring the `src/` subdirectory layout
 
 ## Brittleness
 
@@ -237,9 +265,22 @@ npm run test:watch       # vitest interactive
 npm run test:coverage    # vitest run --coverage (v8 provider, lcov output)
 npm run lint             # eslint
 npm run format           # prettier --write .
+npm run cli -- --help    # ts-node src/cli.ts, runs from source without compiling
 ```
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the lint job as `npx tsc --noEmit` and the test job as `npm test` on `ubuntu-latest` with Node 22. SonarCloud analysis ([`.github/workflows/sonarcloud.yml`](.github/workflows/sonarcloud.yml)) runs on public pushes and PRs when a `SONAR_TOKEN` secret is available. Dependabot patch and minor updates auto-merge via [`.github/workflows/dependabot-auto-merge.yml`](.github/workflows/dependabot-auto-merge.yml); a monthly dependency refresh runs via [`.github/workflows/deps-refresh.yml`](.github/workflows/deps-refresh.yml).
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs three jobs on `ubuntu-latest` with Node 22: `lint` (`npx tsc --noEmit`), `test` (`npm test`), and `pii-gauntlet` (`bash scripts/pii-gauntlet.sh`). SonarCloud analysis ([`.github/workflows/sonarcloud.yml`](.github/workflows/sonarcloud.yml)) runs on public pushes and PRs when a `SONAR_TOKEN` secret is available.
+
+[`.github/workflows/dependabot-auto-merge.yml`](.github/workflows/dependabot-auto-merge.yml) and [`.github/workflows/deps-refresh.yml`](.github/workflows/deps-refresh.yml) are thin callers of reusable workflows in [`weirdapps/shared-workflows`](https://github.com/weirdapps/shared-workflows); the logic lives there, not in this repo. Auto-merge is called with `allow_major_in_group: false`, so a major update is never merged automatically, not even inside a Dependabot group. The dependency refresh runs monthly on the 14th and gates on `npx tsc --noEmit && npm run build && npm test`.
+
+### PII gauntlet
+
+`scripts/pii-gauntlet.sh` greps every **tracked** file for personal data (names, personal emails and phone numbers, colleague and family names, employer-specific hostnames, `/Users/<name>/` paths) and exits non-zero on a hit. It runs both as a pre-commit hook and as a required CI job, so a commit that embeds a real home-directory path or a personal email will fail the build. Run it yourself before pushing:
+
+```bash
+./scripts/pii-gauntlet.sh
+```
+
+It scans `git ls-files` only, so gitignored local files and on-disk session data never trigger it. When writing docs or tests, use placeholder paths such as `/Users/user/...` (the check skips `me`, `you`, `user`, `USER`, `USERNAME`, and the macOS system directories).
 
 ## License
 

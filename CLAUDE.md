@@ -25,11 +25,12 @@ The binary is NOT on PATH — always invoke as `node ~/SourceCode/teams-access/d
 ## Test / Lint
 
 ```bash
-npm test                   # vitest run (49 tests)
+npm test                   # vitest run (52 tests across 13 files)
 npm run test:watch
 npm run test:coverage      # v8 coverage
 npm run lint
 npm run format
+./scripts/pii-gauntlet.sh  # tracked-file PII scan; pre-commit hook AND required CI job
 ```
 
 ## CLI Commands
@@ -60,6 +61,7 @@ src/
   session/                  # jwt.ts, store.ts (atomic writes, 0600)
   util/                     # exit-codes.ts, redact.ts, time.ts
 test_scripts/               # Mirrors src/ layout, vitest tests
+scripts/pii-gauntlet.sh     # Tracked-file PII scan (pre-commit + CI gate)
 dist/                       # Compiled output
 docs/                       # private-api-cookbook.md, spike-results.md
 ```
@@ -75,13 +77,16 @@ docs/                       # private-api-cookbook.md, spike-results.md
 
 ## CI
 
-- **ci.yml** — push/PR to master: lint (`tsc --noEmit`) + test (Node 22)
-- **sonarcloud.yml** — push/PR to master: coverage upload (skips if no `SONAR_TOKEN`)
-- **dependabot-auto-merge.yml** — auto-squash patch/minor; major requires manual review
-- **deps-refresh.yml** — monthly (14th): gate is `tsc --noEmit && npm run build && npm test`
+- **ci.yml**: push/PR to master, Node 22, three jobs: lint (`tsc --noEmit`), test (`npm test`), pii-gauntlet (`bash scripts/pii-gauntlet.sh`)
+- **sonarcloud.yml**: push/PR to master, coverage upload (skips if no `SONAR_TOKEN`)
+- **dependabot-auto-merge.yml**: thin caller of `weirdapps/shared-workflows/.github/workflows/dependabot-auto-merge.yml@main`, passing `allow_major_in_group: false`. The merge logic is NOT in this repo; edit the shared workflow to change behaviour. Effect: patch/minor auto-squash, any major stays open for manual review
+- **deps-refresh.yml**: thin caller of `weirdapps/shared-workflows/.github/workflows/deps-refresh.yml@main`; monthly (14th), gate is `tsc --noEmit && npm run build && npm test`
 
 ## Notes
 
+- **Never trust `auth-check` as a session health signal.** It probes Graph `/me` only, so it returns `{"status":"ok"}` with exit 0 while the `chatsvc` / `chatsvcagg` / IC3 tokens are already expired and every `list-messages` call is 401-ing. Each audience has its own lifetime. Use `health-check` (four probes: `graph_me`, `graph_joined_teams`, `chatsvcagg_updates`, `chatsvc_messages`; exit 5 broken, 1 degraded) before concluding Teams reads work.
+- `--no-auto-reauth` is declared in `src/cli.ts` but never read anywhere. It is a no-op and there is no auto-reauth: an expired session throws `auth_required` (exit 4). Do not document or rely on browser-reopening behaviour.
 - The private chatsvc/chatsvcagg endpoints are undocumented. If `health-check` reports failures, see `docs/private-api-cookbook.md`.
 - `[Claude]` prefix is mandatory on all Teams messages sent by automation (enforced at call site).
 - Session tokens expire ~24h; `auth-renew` refreshes headlessly; `login` does full interactive re-auth.
+- Writing a real home-directory path (`/Users/<name>/...`) or a personal email into any tracked file will fail `pii-gauntlet.sh` in pre-commit and in CI. Use `~/` or `/Users/user/` in examples.

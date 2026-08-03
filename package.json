@@ -1,7 +1,7 @@
 {
   "name": "teams-cli",
   "version": "0.1.0",
-  "description": "TypeScript CLI for Microsoft Teams via captured Outlook-web Bearer token. Mirrors outlook-cli.",
+  "description": "TypeScript CLI for Microsoft Teams via captured Teams-web Bearer token. Mirrors outlook-cli.",
   "license": "MIT",
   "private": true,
   "type": "commonjs",
