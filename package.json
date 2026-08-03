@@ -23,7 +23,7 @@
     "commander": "^15.0.0"
   },
   "optionalDependencies": {
-    "playwright": "^1.61.1"
+    "playwright": "^1.62.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
