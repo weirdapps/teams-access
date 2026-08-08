@@ -90,3 +90,17 @@ docs/                       # private-api-cookbook.md, spike-results.md
 - `[Claude]` prefix is mandatory on all Teams messages sent by automation (enforced at call site).
 - Session tokens expire ~24h; `auth-renew` refreshes headlessly; `login` does full interactive re-auth.
 - Writing a real home-directory path (`/Users/<name>/...`) or a personal email into any tracked file will fail `pii-gauntlet.sh` in pre-commit and in CI. Use `~/` or `/Users/user/` in examples.
+
+## The three M365 CLIs
+
+One surface per repo. They share no session, no Playwright profile and no
+login, and each has its own state directory.
+
+| Surface                     | Repo                | Invoke                                            | State dir            |
+| --------------------------- | ------------------- | ------------------------------------------------- | -------------------- |
+| Mail, calendar, attachments | `outlook-access`    | `outlook-cli` (on PATH)                           | `~/.outlook-cli/`    |
+| Teams chats and channels    | `teams-access`      | `node ~/SourceCode/teams-access/dist/cli.js`      | `~/.teams-cli/`      |
+| SharePoint + OneDrive files | `sharepoint-access` | `node ~/SourceCode/sharepoint-access/dist/cli.js` | `~/.sharepoint-cli/` |
+
+Exit codes 0-6 are identical across all three: **4 = re-authenticate**,
+**5 = upstream error**. Keep it that way; cron wrappers branch on those numbers.
