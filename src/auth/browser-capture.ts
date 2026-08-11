@@ -379,17 +379,28 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       void (async () => {
         for (const { url, settleMs } of [
           { url: 'https://teams.microsoft.com/v2/?view=Chat', settleMs: 7000 },
-          //   2. m365.cloud.microsoft — the M365 home reliably provokes a
-          //      graph.microsoft.com token (fetches /me, /me/photo, insights on
-          //      load). The other surfaces capture chatsvcagg / outlook /
-          //      presence but frequently MISS Graph, which left auth-renew
-          //      returning "graph audience missing" and the teams sentinel stuck
-          //      (multi-day outage). Verified empirically: this surface yields a
-          //      Graph Bearer headless within ~10s. Ordered right after Chat so
-          //      BOTH required audiences (chatsvcagg + graph) are captured early
-          //      — within the token-sync's 30s auth-renew timeout budget.
-          { url: 'https://m365.cloud.microsoft/', settleMs: 12000 },
-          { url: 'https://outlook.office.com/', settleMs: 5000 },
+          //   2. outlook.office.com/mail/ — the Graph provoker. It must stay
+          //      SECOND so both required audiences (chatsvcagg + graph) land
+          //      early, inside the token-sync's auth-renew timeout budget.
+          //
+          //      The /mail/ path is load-bearing. Bare outlook.office.com and
+          //      m365.cloud.microsoft used to yield a Graph Bearer and stopped:
+          //      on 2026-08-11 both were measured over 30s each and produced
+          //      NONE, while /mail/ produced three Graph calls (/v1.0/<tid>/,
+          //      /v1.0/organization, /beta/me/settings) carrying exactly the
+          //      scopes this CLI needs (Chat.Read, Chat.ReadWrite,
+          //      Channel.ReadBasic.All). Bare office.com just redirects to
+          //      m365.cloud.microsoft, so it is not a second chance at Graph.
+          //
+          //      Symptom when this breaks: renewal captures 4-6 audiences,
+          //      every one of them non-Graph, so auth-renew fails its
+          //      REQUIRED_AUDIENCES check and parks the teams sentinel. The
+          //      session itself is fine, which is why it reads as "interactive
+          //      login required" when no human input would have helped.
+          { url: 'https://outlook.office.com/mail/', settleMs: 15000 },
+          //   3+. Kept as belt and braces for presence / tenant surfaces, and
+          //      in case Microsoft restores Graph on the M365 home.
+          { url: 'https://m365.cloud.microsoft/', settleMs: 10000 },
           { url: 'https://www.office.com/', settleMs: 5000 },
         ]) {
           try {
