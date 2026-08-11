@@ -81,6 +81,7 @@ docs/                       # private-api-cookbook.md, spike-results.md
 - **sonarcloud.yml**: push/PR to master, coverage upload (skips if no `SONAR_TOKEN`)
 - **dependabot-auto-merge.yml**: thin caller of `weirdapps/shared-workflows/.github/workflows/dependabot-auto-merge.yml@main`, passing `allow_major_in_group: false`. The merge logic is NOT in this repo; edit the shared workflow to change behaviour. Effect: patch/minor auto-squash, any major stays open for manual review
 - **deps-refresh.yml**: thin caller of `weirdapps/shared-workflows/.github/workflows/deps-refresh.yml@main`; monthly (14th), gate is `tsc --noEmit && npm run build && npm test`
+- **dependabot.yml**: `typescript` major bumps are ignored. TypeScript 7 is out, but every published `@typescript-eslint` release still peers on `typescript >=4.8.4 <6.1.0`, so npm cannot resolve a tree with TS 7 and the Dependabot job dies on `dependency_file_not_resolvable` after burning its 900s inactivity window. Drop the `ignore` entry once `@typescript-eslint` supports TS 7; only then bump `typescript` past 6.x
 
 ## Notes
 

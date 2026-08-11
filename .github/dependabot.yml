@@ -17,6 +17,22 @@ updates:
     commit-message:
       prefix: 'deps'
       include: 'scope'
+    ignore:
+      # typescript 7 cannot be installed here. Every published
+      # @typescript-eslint release (8.67.0 is latest) still declares
+      # peerDependencies.typescript ">=4.8.4 <6.1.0", so npm has no resolvable
+      # tree with typescript 7.x. Dependabot's updater hangs on the peer
+      # co-update for its full 900s inactivity window and then reports
+      # dependency_file_not_resolvable: this is what turned the "Dependabot
+      # Updates" workflow red on 2026-07-13 (run 29238801059) and 2026-07-20
+      # (run 29731112476), and why PR #26 was closed unmerged.
+      # Scope is version-update only, so 6.x patch/minor bumps and any
+      # typescript security advisory still come through.
+      # REMOVE this entry as soon as @typescript-eslint ships a release whose
+      # typescript peer range covers 7.x.
+      - dependency-name: 'typescript'
+        update-types:
+          - 'version-update:semver-major'
     groups:
       development-dependencies:
         dependency-type: 'development'
