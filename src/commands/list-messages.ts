@@ -26,8 +26,7 @@ export interface ListMessagesOptions {
 }
 
 export type Scope =
-  | { kind: 'chat'; threadId: string }
-  | { kind: 'channel'; teamUuid: string; channelId: string };
+  { kind: 'chat'; threadId: string } | { kind: 'channel'; teamUuid: string; channelId: string };
 
 export interface ListMessagesResult {
   scope: Scope;
