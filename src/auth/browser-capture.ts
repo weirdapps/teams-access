@@ -144,6 +144,52 @@ function inspectBearerForLog(req: PWRequest): InspectedBearer | null {
   };
 }
 
+/**
+ * Click the Teams app rail so the SPA asks Entra for a Graph token.
+ *
+ * The old comment here said auto-clicking was tried and that "Teams web's DOM
+ * doesn't expose stable selectors for those buttons". That is not true of the
+ * current UI: `[aria-label*="Calendar" i]` matched and clicked first attempt on
+ * 2026-09-02, and the Graph Bearer landed within seconds. Files is kept as a
+ * fallback because it is SharePoint-backed and also calls Graph.
+ *
+ * Deliberately best-effort: every failure is swallowed. A missing selector must
+ * never break a capture that is otherwise succeeding on the other audiences.
+ */
+async function clickAppRailForGraph(page: {
+  locator: (sel: string) => {
+    first: () => {
+      isVisible: (o?: object) => Promise<boolean>;
+      click: (o?: object) => Promise<void>;
+    };
+  };
+  waitForTimeout: (ms: number) => Promise<void>;
+}): Promise<void> {
+  const candidates = [
+    '[aria-label*="Calendar" i]',
+    '[data-tid*="calendar" i]',
+    'button:has-text("Calendar")',
+    '[aria-label*="Files" i]',
+    '[data-tid*="files" i]',
+  ];
+  for (const sel of candidates) {
+    try {
+      const el = page.locator(sel).first();
+      if (await el.isVisible({ timeout: 2500 })) {
+        await el.click({ timeout: 5000 });
+        process.stderr.write(`[teams-cli login] clicked app rail (${sel}) to provoke Graph\n`);
+        await page.waitForTimeout(8000);
+        return;
+      }
+    } catch {
+      /* try the next selector */
+    }
+  }
+  process.stderr.write(
+    '[teams-cli login] app-rail click found no match; Graph may not be captured\n',
+  );
+}
+
 export async function captureSession(opts: CaptureOptions): Promise<Session> {
   const { chromium } = await import('playwright');
   let context: BrowserContext | undefined;
@@ -407,6 +453,16 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
             process.stderr.write(`[teams-cli login] headless: navigating to ${url}\n`);
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
             await page.waitForTimeout(settleMs);
+            // Clicking the Teams app rail is what actually provokes Graph.
+            // Measured 2026-09-02: NAVIGATION ALONE IS NOT ENOUGH. Loading
+            // teams.microsoft.com/v2/?view=Calendar and ?view=Files headlessly,
+            // 20s settle each, yielded 5 audiences and no Graph. Clicking the
+            // Calendar rail item in the same session immediately produced
+            // GET graph.microsoft.com/v1.0/<tid>/subscribedskus. The SPA only
+            // issues the Graph call in response to a real UI interaction.
+            if (url.startsWith(TEAMS_ROOT)) {
+              await clickAppRailForGraph(page);
+            }
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             process.stderr.write(`[teams-cli login] headless nav warning (${url}): ${msg}\n`);
@@ -417,11 +473,6 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
 
     const info = await captured;
 
-    // Note: we tried auto-clicking Calendar / Files tabs to provoke Graph
-    // token acquisition, but Teams web's DOM doesn't expose stable selectors
-    // for those buttons. Graph tokens get acquired only when Teams' own
-    // background sync decides to fetch SharePoint sites or calendar items.
-    // For now, surface a hint to the user if Graph token wasn't captured.
     const hasGraph = Array.from(tokensByAud.keys()).some(isGraphAudience);
     if (!hasGraph) {
       process.stderr.write(
