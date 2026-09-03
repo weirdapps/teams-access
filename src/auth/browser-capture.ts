@@ -169,6 +169,121 @@ function inspectBearerForLog(req: PWRequest): InspectedBearer | null {
 }
 
 /**
+ * Answer Entra's "Stay signed in?" (KMSI) prompt with Yes.
+ *
+ * This is what makes a login PERSIST. Without it Entra issues only a session
+ * cookie, so every token captured during the run works until the browser closes
+ * and the profile is logged out again on the next launch. Measured 2026-09-03:
+ * three consecutive logins each captured five audiences and each left a profile
+ * that redirected straight to login.microsoftonline.com when reopened seconds
+ * later, which reads exactly like "the session keeps dying" and sent this in
+ * circles. ESTSAUTHPERSISTENT, which the whole silent-renewal path depends on,
+ * is only written when this prompt is accepted.
+ *
+ * Best-effort: tenants that suppress KMSI never show it.
+ */
+async function acceptStaySignedIn(page: {
+  locator: (sel: string) => {
+    first: () => {
+      isVisible: (o?: object) => Promise<boolean>;
+      click: (o?: object) => Promise<void>;
+    };
+  };
+  waitForTimeout: (ms: number) => Promise<void>;
+}): Promise<boolean> {
+  // Identify the KMSI page POSITIVELY before touching anything. #idSIButton9 is
+  // the GENERIC Entra submit button: it is also Next on the username step and
+  // Sign in on the password step. Clicking it blind drives someone else's login
+  // for them. Measured 2026-09-03 12:55: this fired 30 times in one run, mashing
+  // submit while the password was being typed.
+  let isKmsi = false;
+  try {
+    isKmsi =
+      (await page
+        .locator('#KmsiCheckboxField, input[name="DontShowAgain"]')
+        .first()
+        .isVisible({ timeout: 1500 })) ||
+      (await page.locator('text=/Stay signed in\?/i').first().isVisible({ timeout: 1500 }));
+  } catch {
+    isKmsi = false;
+  }
+  if (!isKmsi) return false;
+
+  try {
+    // "Don't show this again" first, so the prompt stops interrupting later runs.
+    const dontAsk = page.locator('#KmsiCheckboxField, input[name="DontShowAgain"]').first();
+    if (await dontAsk.isVisible({ timeout: 2000 })) {
+      await dontAsk.click({ timeout: 3000 }).catch(() => undefined);
+    }
+  } catch {
+    /* optional */
+  }
+  try {
+    const yes = page.locator('#idSIButton9, input[type=submit][value="Yes"]').first();
+    if (await yes.isVisible({ timeout: 4000 })) {
+      await yes.click({ timeout: 5000 });
+      process.stderr.write(
+        `[teams-cli login] answered "Stay signed in?" with Yes so the session persists past this browser\n`,
+      );
+      await page.waitForTimeout(6000);
+      return true;
+    }
+  } catch {
+    /* not present */
+  }
+  return false;
+}
+
+/**
+ * Click through the MCAS "Redirect Notice" interstitial.
+ *
+ * On a Defender for Cloud Apps tenant, navigating to a proxied host can land on
+ * `mcas-proxyweb.mcas.ms/certificate-checker?login=false`, which renders:
+ *
+ *   Redirect Notice
+ *   The link you have followed has requested to redirect you to https://...
+ *   Proceed to teams.cloud.microsoft
+ *
+ * It is a dead end unless the link is clicked. Automation sat on this page until
+ * the login timed out, and because it is a plain HTML page with no sign-in form
+ * and no app, every diagnostic read it as something different: "no audiences",
+ * "session is dead", "app-rail click found no match". Measured 2026-09-03 12:29.
+ *
+ * Best-effort and bounded: a tenant without MCAS never sees this page, and a
+ * failure here must not break a capture that is otherwise fine.
+ */
+async function clearMcasInterstitial(page: {
+  url: () => string;
+  locator: (sel: string) => {
+    first: () => {
+      isVisible: (o?: object) => Promise<boolean>;
+      click: (o?: object) => Promise<void>;
+    };
+  };
+  waitForTimeout: (ms: number) => Promise<void>;
+}): Promise<void> {
+  // Bounded loop: the proxy can chain more than one notice.
+  for (let hop = 0; hop < 4; hop++) {
+    let url = '';
+    try {
+      url = page.url();
+    } catch {
+      return;
+    }
+    if (!/mcas-proxyweb\.mcas\.ms|certificate-checker/i.test(url)) return;
+    try {
+      const link = page.locator('a:has-text("Proceed to")').first();
+      if (!(await link.isVisible({ timeout: 5000 }))) return;
+      await link.click({ timeout: 8000 });
+      process.stderr.write(`[teams-cli login] cleared an MCAS redirect notice\n`);
+      await page.waitForTimeout(8000);
+    } catch {
+      return;
+    }
+  }
+}
+
+/**
  * Click the Teams app rail so the SPA asks Entra for a Graph token.
  *
  * The old comment here said auto-clicking was tried and that "Teams web's DOM
@@ -196,17 +311,32 @@ async function clickAppRailForGraph(page: {
     '[aria-label*="Files" i]',
     '[data-tid*="files" i]',
   ];
-  for (const sel of candidates) {
-    try {
-      const el = page.locator(sel).first();
-      if (await el.isVisible({ timeout: 2500 })) {
-        await el.click({ timeout: 5000 });
-        process.stderr.write(`[teams-cli login] clicked app rail (${sel}) to provoke Graph\n`);
-        await page.waitForTimeout(8000);
-        return;
+  // Two passes. The first gives the SPA time to render its rail, the second is a
+  // quick sweep in case a later selector became visible meanwhile.
+  //
+  // 2.5s per selector was too short on an MCAS tenant: the proxied Teams SPA
+  // consistently reported "app-rail click found no match" three times in a row on
+  // a healthy, signed-in session (2026-09-03 11:31), so Graph was never provoked
+  // and health-check stayed on graph_me FAIL while chat worked fine. The rail is
+  // simply not painted yet at that point.
+  for (const [pass, budget] of [
+    [1, 20000],
+    [2, 4000],
+  ] as const) {
+    for (const sel of candidates) {
+      try {
+        const el = page.locator(sel).first();
+        if (await el.isVisible({ timeout: budget })) {
+          await el.click({ timeout: 5000 });
+          process.stderr.write(
+            `[teams-cli login] clicked app rail (${sel}, pass ${pass}) to provoke Graph\n`,
+          );
+          await page.waitForTimeout(10000);
+          return;
+        }
+      } catch {
+        /* try the next selector */
       }
-    } catch {
-      /* try the next selector */
     }
   }
   process.stderr.write(
@@ -536,6 +666,8 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       const mcasEntry = 'https://teams.cloud.microsoft.mcas.ms/v2/?view=Chat';
       try {
         await page.goto(mcasEntry, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForTimeout(6000);
+        await clearMcasInterstitial(page);
         process.stderr.write(
           `[teams-cli login] entered via the MCAS origin so a dead session shows a real sign-in page rather than the cached offline shell\n`,
         );
@@ -597,6 +729,83 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
     // Running the sequence in both modes gives the combination that actually
     // works: a real, CA-satisfying Chrome session that also clicks the app rail
     // itself instead of hoping someone is at the keyboard.
+    // In headed mode, WAIT for the human to finish signing in before touching
+    // the address bar.
+    //
+    // Running the sequence unconditionally (which is what removing the old
+    // `if (opts.headless)` gate did) navigates away from login.microsoftonline.com
+    // seconds after it appears, while the password is still being typed. Observed
+    // 2026-09-03 10:49: the login ran, the profile's cookies were written at
+    // 10:51 so the human had clearly engaged with it, and not one token was
+    // captured because the page had been dragged off the sign-in form. The gate
+    // existed for a reason; the mistake was deleting it rather than making it
+    // conditional on being signed in.
+    if (!opts.headless) {
+      // Let the MCAS -> ESTS redirect chain land before judging anything.
+      // page.goto resolves on the FIRST response's domcontentloaded, so checking
+      // the URL immediately sees the MCAS host, concludes "already signed in",
+      // and marches off mid-redirect. Observed 2026-09-03 11:05: the wait never
+      // announced itself and the sequence navigated away from the account picker.
+      await page.waitForTimeout(6000);
+
+      // Detect the sign-in surface by its DOM, not only its URL. Entra's account
+      // picker, the password form and the "stay signed in" step all live on
+      // different paths, and a tenant behind MCAS adds its own interstitials.
+      const onSignIn = async (): Promise<boolean> => {
+        try {
+          const url = page.url();
+          if (/login\.microsoftonline\.com|\/signin|logout|certificate-checker/i.test(url)) {
+            return true;
+          }
+          return (
+            (await page
+              .locator(
+                'input[type=password], input[name=loginfmt], #otherTileText, [data-test-id="accountTile"], input[type=email]',
+              )
+              .count()) > 0
+          );
+        } catch {
+          return false; // navigating or closed; the next tick re-reads
+        }
+      };
+
+      const deadline = Date.now() + Math.min(opts.loginTimeoutMs, 240000);
+      let announced = false;
+      let kmsiDone = false;
+      // Require the "signed in" verdict twice in a row, so a momentary gap
+      // between two redirect hops is not mistaken for success.
+      let clearStreak = 0;
+      while (Date.now() < deadline) {
+        if (await onSignIn()) {
+          clearStreak = 0;
+          // The KMSI prompt is part of the sign-in surface; answering it here is
+          // what turns a one-browser session into a persistent one. Once only:
+          // it is a single page in the flow, and retrying it is how the generic
+          // submit button ends up being clicked repeatedly.
+          if (!kmsiDone) kmsiDone = await acceptStaySignedIn(page);
+          if (!announced) {
+            process.stderr.write(
+              `[teams-cli login] sign-in required. Waiting for you to finish; nothing will navigate until you are through.\n`,
+            );
+            announced = true;
+          }
+        } else if (++clearStreak >= 2) {
+          break;
+        }
+        await page.waitForTimeout(2000);
+      }
+      if (announced) {
+        process.stderr.write(`[teams-cli login] signed in, continuing\n`);
+        // Let the SPA settle and write its MSAL cache before we move on.
+        await page.waitForTimeout(8000);
+        try {
+          mergeHarvest(await harvestMsalTokens(page));
+        } catch {
+          /* the poller and the nav sequence are the fallbacks */
+        }
+      }
+    }
+
     {
       // Run navigations in a non-blocking IIFE so the `await captured` below
       // still drives the timeout/resolve loop. We only need the navigations to
@@ -620,6 +829,11 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
           // and its storage actually are, and it is the only one that reveals a
           // dead session by redirecting to login instead of serving a cached shell.
           { url: 'https://teams.cloud.microsoft.mcas.ms/v2/?view=Chat', settleMs: 9000 },
+          // Calendar view directly, as well as via the rail click. The rail is the
+          // reliable Graph provoker when it can be found, but on a slow MCAS-proxied
+          // SPA it may not have painted; landing on the view itself is a second
+          // chance at the same Graph call and costs one navigation.
+          { url: 'https://teams.cloud.microsoft.mcas.ms/v2/?view=Calendar', settleMs: 15000 },
           { url: 'https://teams.cloud.microsoft/v2/?view=Chat', settleMs: 7000 },
           // Legacy host, kept as a fallback for a tenant that has not been moved to
           // cloud.microsoft yet. On a migrated tenant this just redirects and costs
@@ -670,6 +884,7 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
             // Calendar rail item in the same session immediately produced
             // GET graph.microsoft.com/v1.0/<tid>/subscribedskus. The SPA only
             // issues the Graph call in response to a real UI interaction.
+            await clearMcasInterstitial(page);
             if (TEAMS_HOSTS.some((h) => url.startsWith(h))) {
               await clickAppRailForGraph(page);
             }
@@ -700,9 +915,10 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
 
         if (tokensByAud.size === 0) {
           process.stderr.write(
-            `[msal-cache] no unexpired AccessToken in any visited origin's localStorage. The ` +
-              `profile's session is dead (MSAL keeps expired entries, so this means expired, not ` +
-              `absent). Sign in interactively.\n`,
+            `[msal-cache] no unexpired AccessToken in any visited origin's localStorage. This is ` +
+              `NOT proof the session is dead: on this MCAS tenant the tokens are issued per-request ` +
+              `through OWA and never cached here at all, while chatsvc and ic3 worked fine. Read it ` +
+              `as "the cache path found nothing" and check the bearer-seen lines for the wire.\n`,
           );
         }
       })();
