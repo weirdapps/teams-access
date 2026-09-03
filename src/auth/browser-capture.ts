@@ -9,6 +9,7 @@ import {
   type AudienceToken,
 } from '../session/store';
 import { decodeJwt } from '../session/jwt';
+import { harvestMsalTokens } from './msal-harvest';
 import { ExitCode, ExitWithCode } from '../util/exit-codes';
 
 // Teams web moved to the cloud.microsoft domain, the same consolidation that
@@ -24,7 +25,17 @@ const TEAMS_ROOT = 'https://teams.cloud.microsoft/';
 // Both hosts, for the "is this a Teams page?" test. A redirect can leave either one
 // in the URL, and the nav list below still visits the legacy host as a fallback in
 // case a tenant has not been migrated yet.
-const TEAMS_HOSTS = ['https://teams.cloud.microsoft/', 'https://teams.microsoft.com/'];
+const TEAMS_HOSTS = [
+  'https://teams.cloud.microsoft/',
+  'https://teams.microsoft.com/',
+  // MCAS (Defender for Cloud Apps) Conditional Access App Control serves the
+  // whole tenant through "<original-fqdn>.mcas.ms". These are SEPARATE ORIGINS
+  // with their own cookie jar and their own localStorage, which is why a session
+  // can be alive on one and dead on the other. Confirmed on this tenant: the
+  // browser's real Teams runs at teams.cloud.microsoft.mcas.ms.
+  'https://teams.cloud.microsoft.mcas.ms/',
+  'https://teams.microsoft.com.mcas.ms/',
+];
 
 // Microsoft Graph well-known appid + audience strings.
 const GRAPH_APPID = '00000003-0000-0000-c000-000000000000';
@@ -226,6 +237,13 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
   const tokensByAud = new Map<string, CapturedToken>();
   let primaryResolved = false;
 
+  // Merge a batch of MSAL-cache tokens into tokensByAud, persist, and settle the
+  // login if the network listener has not already done so. Declared here (rather
+  // than inline) because it is called once per navigated origin AND once at the
+  // end: localStorage is per-origin, so a single harvest only ever sees one
+  // surface's cache.
+  let mergeHarvest: (batch: import('./msal-harvest').HarvestedToken[]) => void = () => {};
+
   // Open the trace file. Each Bearer-bearing request appends one JSON line.
   // Path is fixed under ~/.teams-cli/ so subsequent debug runs can grep it.
   const { writeFileSync, appendFileSync, mkdirSync, chmodSync, renameSync } =
@@ -240,6 +258,32 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
   }
   const tracePath = join(traceDir, 'login-trace.jsonl');
   const multiTokensPath = join(traceDir, 'multi-tokens.json');
+
+  // Atomic write of the per-audience token map. Extracted so the network path
+  // and the MSAL-cache harvest share one implementation rather than drifting.
+  const writeMultiTokens = (map: Map<string, CapturedToken>): void => {
+    try {
+      const payload: Record<
+        string,
+        { token: string; appid?: string; scp?: string; exp?: number; capturedAt: string }
+      > = {};
+      for (const [aud, t] of map.entries()) {
+        payload[aud] = {
+          token: t.token,
+          appid: t.appid,
+          scp: t.scp,
+          exp: t.exp,
+          capturedAt: t.capturedAt,
+        };
+      }
+      const tmpPath = `${multiTokensPath}.tmp`;
+      writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
+      chmodSync(tmpPath, 0o600);
+      renameSync(tmpPath, multiTokensPath);
+    } catch (e) {
+      process.stderr.write(`[multi-tokens] WARN write failed: ${(e as Error).message}\n`);
+    }
+  };
   // Truncate any prior trace.
   try {
     writeFileSync(tracePath, '');
@@ -258,7 +302,13 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
     // The diagnostic window collects more audiences after that; the multi-token
     // session is built from everything seen. We no longer require a Graph token
     // to be the "primary" — it's just one of N tokens in session.tokens.
+    // Hoisted so the MSAL-cache harvest below can settle this promise too. The
+    // network listener is no longer the only way a login can succeed.
+    let resolveCaptured: ((v: CapturedTokenInfo) => void) | undefined;
+    let captureTimer: ReturnType<typeof setTimeout> | undefined;
+
     const captured = new Promise<CapturedTokenInfo>((resolve, reject) => {
+      resolveCaptured = resolve;
       const timer = setTimeout(() => {
         const summary = Array.from(audiencesSeen.entries())
           .map(([aud, n]) => `  ${aud} (×${n})`)
@@ -274,6 +324,7 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
           }),
         );
       }, opts.loginTimeoutMs);
+      captureTimer = timer;
 
       context!.on('request', (req) => {
         // Diagnostic log for every Bearer (regardless of audience).
@@ -400,9 +451,125 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       });
     });
 
+    mergeHarvest = (batch) => {
+      const fresh: string[] = [];
+      for (const t of batch) {
+        const prev = tokensByAud.get(t.aud);
+        // Keep whichever expires later: a later origin can hold a fresher copy.
+        if (prev && (prev.exp ?? 0) >= (t.exp ?? 0)) continue;
+        tokensByAud.set(t.aud, {
+          token: t.token,
+          aud: t.aud,
+          exp: t.exp,
+          scp: t.scp,
+          appid: t.appid,
+          capturedAt: new Date().toISOString(),
+        });
+        if (!prev) fresh.push(t.aud);
+      }
+      if (!fresh.length) return;
+      process.stderr.write(
+        `[msal-cache] +${fresh.length} audience(s): ${fresh.join(', ')} (${tokensByAud.size} total)\n`,
+      );
+      writeMultiTokens(tokensByAud);
+
+      // Settle the login on the cache when the wire produced nothing, which is
+      // the normal case on an MCAS tenant. Prefer Graph as the primary token so
+      // the resulting session matches what the network path used to produce.
+      if (primaryResolved || !resolveCaptured) return;
+      const graph =
+        Array.from(tokensByAud.values()).find((t) => isGraphAudience(t.aud)) ??
+        Array.from(tokensByAud.values())[0];
+      if (!graph) return;
+      primaryResolved = true;
+      if (captureTimer) clearTimeout(captureTimer);
+      let claims: Record<string, unknown> = {};
+      try {
+        claims = decodeJwt(graph.token) as Record<string, unknown>;
+      } catch {
+        /* a token we cannot decode is still usable as a Bearer */
+      }
+      resolveCaptured({
+        bearerToken: graph.token,
+        aud: graph.aud,
+        appid: graph.appid,
+        scp: graph.scp,
+        upn:
+          (typeof claims.upn === 'string' ? claims.upn : undefined) ??
+          (typeof claims.preferred_username === 'string' ? claims.preferred_username : undefined),
+        oid: typeof claims.oid === 'string' ? claims.oid : undefined,
+        tid: typeof claims.tid === 'string' ? claims.tid : undefined,
+      });
+    };
+
     const page = await context.newPage();
     await page.goto(TEAMS_ROOT);
-    process.stderr.write(`[teams-cli login] navigated to ${TEAMS_ROOT}\n`);
+
+    // For an interactive login, go to the MCAS origin instead of the canonical
+    // one, because only the MCAS origin tells the truth about the session.
+    //
+    // Teams registers a Service Worker that serves a complete offline shell from
+    // IndexedDB. On a DEAD session that shell still renders: measured 2026-09-03,
+    // a profile whose every MSAL token had expired 28 hours earlier loaded
+    // "(1) Chat | ... | Microsoft Teams" with 292 [data-tid] nodes, real chat
+    // history and a clickable app rail. The app never reached the network, so it
+    // never discovered it was logged out, so NO SIGN-IN PAGE EVER APPEARED. A
+    // human sitting in front of that window has nothing to sign in to. That is
+    // why repeated interactive logins produced one audience or none.
+    //
+    // Unregistering the Service Worker is NOT sufficient: tried, it reports
+    // "unregistered 1" and the very next load still returns the cached shell
+    // with zero input fields, because the app is also in the HTTP cache.
+    //
+    // Going to <host>.mcas.ms does work, and is measured, not assumed:
+    //   teams.cloud.microsoft/v2/          -> title "(1) Chat | ...", 0 inputs
+    //   teams.cloud.microsoft.mcas.ms/v2/  -> login.microsoftonline.com,
+    //                                         title "Sign in to your account",
+    //                                         1 email input, 1 password input
+    // Same profile, same second. The MCAS origin is a separate origin with its
+    // own cookie jar and no Service Worker cache of its own, so it cannot serve
+    // a stale shell.
+    //
+    // A tenant without Conditional Access App Control has no such host; the goto
+    // fails fast and we keep the canonical page already loaded above.
+    if (!opts.headless) {
+      const mcasEntry = 'https://teams.cloud.microsoft.mcas.ms/v2/?view=Chat';
+      try {
+        await page.goto(mcasEntry, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        process.stderr.write(
+          `[teams-cli login] entered via the MCAS origin so a dead session shows a real sign-in page rather than the cached offline shell\n`,
+        );
+      } catch {
+        process.stderr.write(
+          `[teams-cli login] no MCAS origin on this tenant; staying on ${TEAMS_ROOT}\n`,
+        );
+      }
+    }
+    process.stderr.write(`[teams-cli login] navigated to ${page.url()}\n`);
+    // Poll the MSAL cache of whatever origin the page is currently on, until the
+    // login settles or the window closes.
+    //
+    // A one-shot harvest is not enough for two independent reasons. On a live
+    // profile the Teams SPA populates its cache within seconds and we want to
+    // finish immediately, without navigating anywhere. On a dead profile the
+    // human has to sign in first, and that takes as long as it takes: fixed
+    // harvest points all fire before the credentials are even typed, then report
+    // "session is dead" about a session that came up thirty seconds later.
+    // Polling covers both, and costs one cheap localStorage read every 5s.
+    const harvestPoll = setInterval(() => {
+      void (async () => {
+        if (primaryResolved) return;
+        try {
+          mergeHarvest(await harvestMsalTokens(page));
+        } catch {
+          /* page navigating or closed; the next tick retries */
+        }
+      })();
+    }, 5000);
+    if (typeof harvestPoll.unref === 'function') harvestPoll.unref();
+    const stopHarvestPoll = (): void => clearInterval(harvestPoll);
+    page.once('close', stopHarvestPoll);
+    context.once('close', stopHarvestPoll);
     process.stderr.write(
       `[teams-cli login] waiting for a Graph-audience Bearer (timeout ${opts.loginTimeoutMs}ms)\n`,
     );
@@ -449,6 +616,10 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       //                                surfaces.
       void (async () => {
         for (const { url, settleMs } of [
+          // MCAS origin first: on a proxied tenant this is where the live session
+          // and its storage actually are, and it is the only one that reveals a
+          // dead session by redirecting to login instead of serving a cached shell.
+          { url: 'https://teams.cloud.microsoft.mcas.ms/v2/?view=Chat', settleMs: 9000 },
           { url: 'https://teams.cloud.microsoft/v2/?view=Chat', settleMs: 7000 },
           // Legacy host, kept as a fallback for a tenant that has not been moved to
           // cloud.microsoft yet. On a migrated tenant this just redirects and costs
@@ -502,10 +673,37 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
             if (TEAMS_HOSTS.some((h) => url.startsWith(h))) {
               await clickAppRailForGraph(page);
             }
+
+            // Harvest HERE, before navigating away. localStorage is per-origin,
+            // so the MSAL cache that Teams writes on teams.cloud.microsoft is
+            // simply not readable once the page is on outlook.office.com or
+            // www.office.com. Harvesting only at the end of the loop read the
+            // LAST origin and reported "session is dead" while a full set of
+            // valid Teams tokens sat one origin behind it. Each surface also
+            // keeps its own cache, so sweeping every origin is what collects
+            // Teams, Outlook and the M365 shell audiences in one pass.
+            const here = await harvestMsalTokens(page);
+            if (here.length) mergeHarvest(here);
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             process.stderr.write(`[teams-cli login] headless nav warning (${url}): ${msg}\n`);
           }
+        }
+
+        // Final sweep, for the last origin visited.
+        try {
+          mergeHarvest(await harvestMsalTokens(page));
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          process.stderr.write(`[msal-cache] harvest failed: ${msg}\n`);
+        }
+
+        if (tokensByAud.size === 0) {
+          process.stderr.write(
+            `[msal-cache] no unexpired AccessToken in any visited origin's localStorage. The ` +
+              `profile's session is dead (MSAL keeps expired entries, so this means expired, not ` +
+              `absent). Sign in interactively.\n`,
+          );
         }
       })();
     }
