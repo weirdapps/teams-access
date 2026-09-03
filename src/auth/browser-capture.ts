@@ -11,7 +11,20 @@ import {
 import { decodeJwt } from '../session/jwt';
 import { ExitCode, ExitWithCode } from '../util/exit-codes';
 
-const TEAMS_ROOT = 'https://teams.microsoft.com/';
+// Teams web moved to the cloud.microsoft domain, the same consolidation that
+// produced m365.cloud.microsoft (already in the nav list below). teams.microsoft.com
+// still answers 200 and redirects, so nothing here failed loudly: the redirect just
+// lands on a shell whose app rail does not match the selectors in
+// clickAppRailForGraph, the click that "actually provokes Graph" reported
+// "found no match", and renewal captured zero audiences while the session itself was
+// perfectly healthy. Measured 2026-09-03, after headless renewal had been returning
+// "(none)" for days against a tenant where Teams web worked fine in a normal browser.
+const TEAMS_ROOT = 'https://teams.cloud.microsoft/';
+
+// Both hosts, for the "is this a Teams page?" test. A redirect can leave either one
+// in the URL, and the nav list below still visits the legacy host as a fallback in
+// case a tenant has not been migrated yet.
+const TEAMS_HOSTS = ['https://teams.cloud.microsoft/', 'https://teams.microsoft.com/'];
 
 // Microsoft Graph well-known appid + audience strings.
 const GRAPH_APPID = '00000003-0000-0000-c000-000000000000';
@@ -400,12 +413,24 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       );
     }
 
-    // In headless mode, the Teams SPA doesn't auto-navigate, so the user-clicks
-    // hint above doesn't apply. Drive the browser through M365 surfaces that
-    // reliably provoke Graph + chatsvcagg + ic3 audience requests. Validated
-    // empirically: this sequence captures all critical Phase 1 audiences
-    // (graph.microsoft.com, chatsvcagg, ic3, presence) in ~45s headless.
-    if (opts.headless) {
+    // Drive the browser through M365 surfaces that reliably provoke Graph +
+    // chatsvcagg + ic3 audience requests. Validated empirically: this sequence
+    // captures all critical Phase 1 audiences (graph.microsoft.com, chatsvcagg,
+    // ic3, presence) in ~45s.
+    //
+    // This used to be gated on `opts.headless`, which split the two halves of a
+    // working capture apart and meant neither mode could finish the job:
+    //   headed   authenticates fine, but only printed the hint above and waited
+    //            for a human to click. Left alone it captured one audience, or
+    //            none at all if nobody happened to be watching the window.
+    //   headless clicks everything correctly, but on a Conditional-Access tenant
+    //            never authenticates: measured 2026-09-03, an entire headless run
+    //            wrote a ZERO-BYTE request trace, i.e. not one Bearer of any
+    //            audience, while the same profile worked headed.
+    // Running the sequence in both modes gives the combination that actually
+    // works: a real, CA-satisfying Chrome session that also clicks the app rail
+    // itself instead of hoping someone is at the keyboard.
+    {
       // Run navigations in a non-blocking IIFE so the `await captured` below
       // still drives the timeout/resolve loop. We only need the navigations to
       // FIRE the requests; the request listener captures Bearers as they go.
@@ -424,7 +449,12 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       //                                surfaces.
       void (async () => {
         for (const { url, settleMs } of [
-          { url: 'https://teams.microsoft.com/v2/?view=Chat', settleMs: 7000 },
+          { url: 'https://teams.cloud.microsoft/v2/?view=Chat', settleMs: 7000 },
+          // Legacy host, kept as a fallback for a tenant that has not been moved to
+          // cloud.microsoft yet. On a migrated tenant this just redirects and costs
+          // a few seconds; it must NOT come first, or the redirect chain is what the
+          // app-rail click lands on.
+          { url: 'https://teams.microsoft.com/v2/?view=Chat', settleMs: 5000 },
           //   2. outlook.office.com/mail/ — the Graph provoker. It must stay
           //      SECOND so both required audiences (chatsvcagg + graph) land
           //      early, inside the token-sync's auth-renew timeout budget.
@@ -443,7 +473,16 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
           //      REQUIRED_AUDIENCES check and parks the teams sentinel. The
           //      session itself is fine, which is why it reads as "interactive
           //      login required" when no human input would have helped.
+          //      2026-09-03: on an MCAS tenant this host is not where Outlook web
+          //      actually lives. Defender for Cloud Apps proxies through
+          //      "<original-fqdn>.mcas.ms", and the measured live URL was
+          //      outlook.office365.com.mcas.ms/mail/. Navigating to the canonical
+          //      host on such a tenant brings up no SPA, so the Graph provoker
+          //      provoked nothing and renewal saw zero audiences. Both forms are
+          //      tried; .mcas.ms is the generic proxy hostname (the tenant is in
+          //      the McasTsid query param), so nothing tenant-specific is pinned.
           { url: 'https://outlook.office.com/mail/', settleMs: 15000 },
+          { url: 'https://outlook.office365.com.mcas.ms/mail/', settleMs: 15000 },
           //   3+. Kept as belt and braces for presence / tenant surfaces, and
           //      in case Microsoft restores Graph on the M365 home.
           { url: 'https://m365.cloud.microsoft/', settleMs: 10000 },
@@ -460,7 +499,7 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
             // Calendar rail item in the same session immediately produced
             // GET graph.microsoft.com/v1.0/<tid>/subscribedskus. The SPA only
             // issues the Graph call in response to a real UI interaction.
-            if (url.startsWith(TEAMS_ROOT)) {
+            if (TEAMS_HOSTS.some((h) => url.startsWith(h))) {
               await clickAppRailForGraph(page);
             }
           } catch (e) {
