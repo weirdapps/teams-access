@@ -34,11 +34,28 @@ updates:
         update-types:
           - 'version-update:semver-major'
     groups:
+      # The vitest family must move as one PR. @vitest/coverage-v8 declares an
+      # EXACT peer on its runner ('peer vitest@"4.1.11" from
+      # @vitest/coverage-v8@4.1.11'), so a PR that bumps one and not the other
+      # produces a tree npm cannot resolve and `npm ci` dies on ERESOLVE before
+      # a single test runs. development-dependencies below is filtered to
+      # minor/patch, so a major like 4.1.11 -> 5.0.0 fell OUT of that group and
+      # dependabot opened one PR per package: that is PR #6 and PR #7, both
+      # permanently red. This group carries NO update-types key, which means
+      # all semver levels, and it is listed FIRST because a dependency joins
+      # the first group it matches.
+      vitest:
+        patterns:
+          - 'vitest'
+          - '@vitest/*'
       development-dependencies:
         dependency-type: 'development'
         update-types:
           - 'minor'
           - 'patch'
+        exclude-patterns:
+          - 'vitest'
+          - '@vitest/*'
       production-dependencies:
         dependency-type: 'production'
         update-types:
