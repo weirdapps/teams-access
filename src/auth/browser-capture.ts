@@ -196,14 +196,14 @@ async function acceptStaySignedIn(page: {
   // Sign in on the password step. Clicking it blind drives someone else's login
   // for them. Measured 2026-09-03 12:55: this fired 30 times in one run, mashing
   // submit while the password was being typed.
-  let isKmsi = false;
+  let isKmsi: boolean;
   try {
     isKmsi =
       (await page
         .locator('#KmsiCheckboxField, input[name="DontShowAgain"]')
         .first()
         .isVisible({ timeout: 1500 })) ||
-      (await page.locator('text=/Stay signed in\?/i').first().isVisible({ timeout: 1500 }));
+      (await page.locator('text=/Stay signed in?/i').first().isVisible({ timeout: 1500 }));
   } catch {
     isKmsi = false;
   }
@@ -264,7 +264,7 @@ async function clearMcasInterstitial(page: {
 }): Promise<void> {
   // Bounded loop: the proxy can chain more than one notice.
   for (let hop = 0; hop < 4; hop++) {
-    let url = '';
+    let url: string;
     try {
       url = page.url();
     } catch {
