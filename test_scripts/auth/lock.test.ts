@@ -62,6 +62,32 @@ describe('acquireLock', () => {
     expect(fs.existsSync(lockPath)).toBe(false);
   });
 
+  it('treats a PID it may not signal as alive rather than stealing the lock', async () => {
+    // PID 1 is launchd/init, owned by root, so process.kill(1, 0) raises EPERM
+    // for an ordinary user. Guessing "not mine, therefore dead" would hand the
+    // profile to a second Chromium while the first is still inside it.
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    fs.writeFileSync(lockPath, '1\n');
+    await expect(acquireLock(lockPath)).rejects.toThrow(
+      /another teams-cli instance holds the lock/,
+    );
+    expect(fs.readFileSync(lockPath, 'utf8').trim()).toBe('1');
+  });
+
+  it('reclaims a lock holding a nonsense PID', async () => {
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    fs.writeFileSync(lockPath, 'not-a-pid\n');
+    const release = await acquireLock(lockPath);
+    expect(fs.readFileSync(lockPath, 'utf8').trim()).toBe(String(process.pid));
+    await release();
+  });
+
+  it('survives the lock vanishing under it, since release must not throw', async () => {
+    const release = await acquireLock(lockPath);
+    fs.unlinkSync(lockPath);
+    await expect(release()).resolves.toBeUndefined();
+  });
+
   it('releases idempotently, so a finally block cannot throw', async () => {
     const release = await acquireLock(lockPath);
     await release();

@@ -60,9 +60,25 @@ vi.mock('../../src/session/store', () => ({
 }));
 
 describe('runAuthRenew exit codes', () => {
+  // HOME is redirected because runAuthRenew now takes a real lock under
+  // $HOME/.teams-cli. Without this these tests reach for the live lock and fail
+  // with auth_renew_locked whenever the 15-minute token sync happens to be
+  // mid-renew, which is both flaky and a test interfering with production.
+  let home: string;
+  let originalHome: string | undefined;
+
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    originalHome = process.env.HOME;
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-renew-rc-'));
+    process.env.HOME = home;
+  });
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    fs.rmSync(home, { recursive: true, force: true });
   });
 
   async function renewRejectingWith(err: Error) {
@@ -157,6 +173,52 @@ describe('runAuthRenew holds the browser lock', () => {
       );
     });
     expect(fs.existsSync(lockPath())).toBe(false);
+  });
+
+  it('returns ok and reports every audience it captured', async () => {
+    const { writeSession } = await import('../../src/session/store');
+    const tokens = {
+      'https://graph.microsoft.com': {},
+      'https://chatsvcagg.teams.microsoft.com': {},
+      'https://outlook.office.com/': {},
+    };
+    const result = (await renew(async () => ({
+      tokens,
+      account: { upn: 'user@example.com' },
+    }))) as { status: string; audiencesCaptured: number; account: { upn?: string } };
+    expect(result.status).toBe('ok');
+    expect(result.audiencesCaptured).toBe(3);
+    expect(result.account.upn).toBe('user@example.com');
+    expect(vi.mocked(writeSession)).toHaveBeenCalledOnce();
+    expect(fs.existsSync(lockPath())).toBe(false);
+  });
+
+  it('persists the session before rejecting an incomplete capture', async () => {
+    // A Graph token refreshed for list-teams is worth keeping even when
+    // chatsvcagg is missing, so the write must happen before the audience gate.
+    const { writeSession } = await import('../../src/session/store');
+    const thrown = (await renew(async () => ({
+      tokens: { 'https://graph.microsoft.com': {} },
+    }))) as ExitWithCode;
+    expect(thrown?.code).toBe(ExitCode.AuthRequired);
+    expect(thrown?.payload.code).toBe('auth_renew_incomplete');
+    expect(thrown?.payload.missingAudiences).toEqual(['https://chatsvcagg.teams.microsoft.com']);
+    expect(vi.mocked(writeSession)).toHaveBeenCalledOnce();
+    expect(fs.existsSync(lockPath())).toBe(false);
+  });
+
+  it('never takes the lock when there is no session to renew', async () => {
+    const { captureSession } = await import('../../src/auth/browser-capture');
+    const { readSession } = await import('../../src/session/store');
+    vi.mocked(readSession).mockReturnValue(null);
+    const { runAuthRenew } = await import('../../src/commands/auth-renew');
+    const thrown = await runAuthRenew().then(
+      () => null,
+      (e: unknown) => e as ExitWithCode,
+    );
+    expect(thrown?.payload.code).toBe('auth_no_reauth');
+    expect(fs.existsSync(lockPath())).toBe(false);
+    expect(vi.mocked(captureSession)).not.toHaveBeenCalled();
   });
 
   it('exits Upstream, not AuthRequired, when another instance holds it', async () => {
