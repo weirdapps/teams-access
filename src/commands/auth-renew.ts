@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 import { captureSession } from '../auth/browser-capture';
+import { acquireLock } from '../auth/lock';
 import { readSession, writeSession, type Session } from '../session/store';
 import { ExitCode, ExitWithCode, type ExitCodeValue } from '../util/exit-codes';
 
@@ -95,6 +96,10 @@ function defaultSessionPath(): string {
   return join(process.env.HOME ?? homedir(), '.teams-cli', 'session.json');
 }
 
+export function defaultLockPath(): string {
+  return join(process.env.HOME ?? homedir(), '.teams-cli', '.browser.lock');
+}
+
 export async function runAuthRenew(opts: AuthRenewOptions = {}): Promise<AuthRenewResult> {
   // A renewal only makes sense if a prior interactive login left a profile
   // and a session file behind. Fail fast otherwise — the caller must run `login`.
@@ -107,6 +112,34 @@ export async function runAuthRenew(opts: AuthRenewOptions = {}): Promise<AuthRen
     });
   }
 
+  // One process at a time in the persistent profile. Without this, an
+  // overlapping invocation waits on Chromium's own profile lock and burns the
+  // full three-minute Playwright budget before reporting a launch timeout.
+  // Upstream rather than AuthRequired: contention is transient and the next
+  // scheduled run gets it.
+  let release: () => Promise<void>;
+  try {
+    release = await acquireLock(defaultLockPath());
+  } catch (err) {
+    throw new ExitWithCode(ExitCode.Upstream, {
+      code: 'auth_renew_locked',
+      message: `${err instanceof Error ? err.message : String(err)}. Transient; the next run retries.`,
+    });
+  }
+
+  try {
+    return await captureAndValidate(opts, sessionPath);
+  } finally {
+    // A lock this run cannot release would wedge every later run behind a dead
+    // owner until the PID probe reclaims it. Never let it mask the real error.
+    await release().catch(() => undefined);
+  }
+}
+
+async function captureAndValidate(
+  opts: AuthRenewOptions,
+  sessionPath: string,
+): Promise<AuthRenewResult> {
   const t0 = Date.now();
 
   let captured: Session;
