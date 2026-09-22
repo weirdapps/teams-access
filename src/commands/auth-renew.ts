@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 
 import { captureSession } from '../auth/browser-capture';
 import { readSession, writeSession, type Session } from '../session/store';
-import { ExitCode, ExitWithCode } from '../util/exit-codes';
+import { ExitCode, ExitWithCode, type ExitCodeValue } from '../util/exit-codes';
 
 /** Default headless renewal timeout. Headless mode drives 4 navigations
  *  (teams root → teams /v2/?view=Chat → outlook → office.com) to provoke
@@ -65,6 +65,28 @@ export interface AuthRenewResult {
   audiencesCaptured: number;
 }
 
+/**
+ * Which exit code a captureSession() failure deserves.
+ *
+ * Renewal fails for two unrelated reasons and used to report both as
+ * AuthRequired, which every caller reads as "the device-trust cookie died, go
+ * and log in at the keyboard". Measured over 132 runs on 2026-09-22, 14 failed
+ * and the four that left a trace were ERR_INTERNET_DISCONNECTED,
+ * ERR_CERT_AUTHORITY_INVALID twice (a captive portal intercepting TLS) and a
+ * launchPersistentContext timeout. No login would have fixed any of them, and
+ * they cost six alert emails asking for one.
+ *
+ * Only what is unambiguously transport or launch moves to Upstream. Anything
+ * else, including a navigation timeout that may well be a login page, keeps the
+ * old AuthRequired: misreporting a real auth failure as transient would hide the
+ * one case a human has to act on.
+ */
+export function classifyCaptureFailure(message: string): ExitCodeValue {
+  if (/net::ERR_/.test(message)) return ExitCode.Upstream;
+  if (/browserType\.launch/.test(message)) return ExitCode.Upstream;
+  return ExitCode.AuthRequired;
+}
+
 function defaultProfileDir(): string {
   return join(process.env.HOME ?? homedir(), '.teams-cli', 'playwright-profile');
 }
@@ -97,9 +119,19 @@ export async function runAuthRenew(opts: AuthRenewOptions = {}): Promise<AuthRen
       diagnosticExtraMs: DEFAULT_DIAGNOSTIC_EXTRA_MS,
     });
   } catch (err) {
-    // Headless renewal failed. Most likely cause: ESTSAUTHPERSISTENT cookie
-    // expired or tenant policy forced re-MFA. Caller must run interactive login.
     const msg = err instanceof Error ? err.message : String(err);
+    const code = classifyCaptureFailure(msg);
+    if (code === ExitCode.Upstream) {
+      // Never reached Microsoft, or Chrome never started. Transient: the next
+      // scheduled run retries, and no human action would help.
+      throw new ExitWithCode(ExitCode.Upstream, {
+        code: 'auth_renew_unreachable',
+        message: `Headless renewal could not reach Microsoft: ${msg}. Transient; no login needed.`,
+      });
+    }
+    // Reached Microsoft and came back empty. Most likely cause:
+    // ESTSAUTHPERSISTENT cookie expired or tenant policy forced re-MFA. Caller
+    // must run interactive login.
     throw new ExitWithCode(ExitCode.AuthRequired, {
       code: 'auth_renew_failed',
       message: `Headless renewal failed: ${msg}. Run \`teams-cli login\`.`,
