@@ -10,7 +10,10 @@
 // `browserType.launchPersistentContext: Timeout 180000ms exceeded`. None was an
 // auth failure, no login would have fixed any of them, and they cost six alert
 // emails telling the user to go and run `teams-cli login`.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import { classifyCaptureFailure } from '../../src/commands/auth-renew';
 import { ExitCode, type ExitWithCode } from '../../src/util/exit-codes';
@@ -98,5 +101,72 @@ describe('runAuthRenew exit codes', () => {
     );
     expect(thrown?.code).toBe(ExitCode.AuthRequired);
     expect(thrown?.payload.code).toBe('auth_renew_failed');
+  });
+});
+
+// A 698 MB persistent profile driven by two processes at once is how
+// `launchPersistentContext: Timeout 180000ms exceeded` happens. HOME is
+// redirected so these never touch the real ~/.teams-cli/.browser.lock, which the
+// live 15-minute token sync uses.
+describe('runAuthRenew holds the browser lock', () => {
+  let home: string;
+  let originalHome: string | undefined;
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    originalHome = process.env.HOME;
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-renew-'));
+    process.env.HOME = home;
+  });
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  const lockPath = () => path.join(home, '.teams-cli', '.browser.lock');
+
+  async function renew(captureImpl: () => Promise<unknown>) {
+    const { captureSession } = await import('../../src/auth/browser-capture');
+    const { readSession } = await import('../../src/session/store');
+    vi.mocked(readSession).mockReturnValue({ tokens: {} } as never);
+    vi.mocked(captureSession).mockImplementation(captureImpl as never);
+    const { runAuthRenew } = await import('../../src/commands/auth-renew');
+    return runAuthRenew().then(
+      (r) => r,
+      (e: unknown) => e as ExitWithCode,
+    );
+  }
+
+  it('takes the lock while capturing and frees it afterwards', async () => {
+    let heldDuringCapture = false;
+    await renew(async () => {
+      heldDuringCapture = fs.existsSync(lockPath());
+      throw new Error('Timed out waiting for a Teams bearer token');
+    });
+    expect(heldDuringCapture).toBe(true);
+    expect(fs.existsSync(lockPath())).toBe(false);
+  });
+
+  it('frees the lock even when the capture throws, so one blip cannot wedge every later run', async () => {
+    await renew(async () => {
+      throw new Error(
+        'page.goto: net::ERR_INTERNET_DISCONNECTED at https://teams.cloud.microsoft/',
+      );
+    });
+    expect(fs.existsSync(lockPath())).toBe(false);
+  });
+
+  it('exits Upstream, not AuthRequired, when another instance holds it', async () => {
+    fs.mkdirSync(path.dirname(lockPath()), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(lockPath(), `${process.pid}\n`);
+    const thrown = (await renew(async () => ({ tokens: {} }))) as ExitWithCode;
+    expect(thrown?.code).toBe(ExitCode.Upstream);
+    expect(thrown?.payload.code).toBe('auth_renew_locked');
+    // The live holder's lock must survive: releasing it here would hand the
+    // profile to a third process while the real owner is still inside it.
+    expect(fs.existsSync(lockPath())).toBe(true);
   });
 });
