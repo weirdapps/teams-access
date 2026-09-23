@@ -155,6 +155,94 @@ export function evictNearExpiryInPage(arg: {
 }
 
 /**
+ * Seconds left on a JWT when that is under `floorS`, else undefined: also when
+ * there is no floor, or the token carries no readable `exp`, because refusing
+ * a token on a guess could throw away the only copy of a working credential.
+ */
+export function secondsLeftUnderFloor(
+  jwt: string,
+  floorS: number,
+  nowS: number = Math.floor(Date.now() / 1000),
+): number | undefined {
+  if (!(floorS > 0)) return undefined;
+  const claims = decodeClaims(jwt);
+  const exp = claims && typeof claims.exp === 'number' ? claims.exp : undefined;
+  if (exp === undefined) return undefined;
+  const left = exp - nowS;
+  return left < floorS ? left : undefined;
+}
+
+/**
+ * A predicate for the network listener: true when a bearer seen on the wire is
+ * under the renew floor and must not be captured or become the session's
+ * primary. Says so once per audience, since the SPA re-sends the same token on
+ * every call. With no floor (interactive login) it never refuses.
+ */
+export function wireFloorGuard(
+  floorS: number,
+  say: (line: string) => void = (line) => process.stderr.write(line),
+): (token: string, aud: string) => boolean {
+  const told = new Set<string>();
+  return (token, aud) => {
+    const left = secondsLeftUnderFloor(token, floorS);
+    if (left === undefined) return false;
+    if (!told.has(aud)) {
+      told.add(aud);
+      say(`[wire] not capturing aud=${aud}: ${left}s left, under the ${floorS}s renew floor\n`);
+    }
+    return true;
+  };
+}
+
+/** The slice of a Playwright BrowserContext the renew eviction needs. */
+export interface InitScriptTarget {
+  addInitScript(
+    script: (arg: { minTtlSeconds: number }) => unknown,
+    arg: { minTtlSeconds: number },
+  ): Promise<unknown>;
+}
+
+/**
+ * Install {@link evictNearExpiryInPage} to run before every document on the
+ * context. An init script rather than evict-then-reload: it costs no extra page
+ * load, and the renew budget (first bearer + 40s) already cuts the navigation
+ * list short. Returns false, installing nothing, when there is no threshold.
+ */
+export async function installRenewEviction(
+  context: InitScriptTarget,
+  minTtlSeconds: number,
+  floorS: number,
+  say: (line: string) => void = (line) => process.stderr.write(line),
+): Promise<boolean> {
+  if (!(minTtlSeconds > 0)) return false;
+  await context.addInitScript(evictNearExpiryInPage, { minTtlSeconds });
+  say(
+    `[msal-cache] renew: evicting cached access tokens with under ${minTtlSeconds}s left ` +
+      `before each page boots, and capturing nothing under ${floorS}s\n`,
+  );
+  return true;
+}
+
+/** Say what the init script took out of the current document's cache, if anything. */
+export async function reportEvictions(
+  page: EvaluatablePage,
+  where: string,
+  say: (line: string) => void = (line) => process.stderr.write(line),
+): Promise<void> {
+  const line = describeEvictions(where, await readEvictionReport(page));
+  if (line) say(line);
+}
+
+/** The stderr line for one document's evictions, or '' for none. Never a token. */
+export function describeEvictions(where: string, evicted: EvictedToken[]): string {
+  if (!evicted.length) return '';
+  return (
+    `[msal-cache] evicted ${evicted.length} near-expiry token(s) on ${where} so the SPA ` +
+    `mints fresh ones: ${evicted.map((e) => `${e.aud} (${e.ttlSeconds}s left)`).join(', ')}\n`
+  );
+}
+
+/**
  * What {@link evictNearExpiryInPage} removed in the page's current document,
  * then cleared so the same eviction is never reported twice. [] on any error.
  */

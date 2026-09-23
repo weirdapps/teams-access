@@ -335,4 +335,12 @@ describe('runAuthRenew refuses a stale capture', () => {
     });
     expect((outcome as { status: string }).status).toBe('ok');
   });
+
+  it('does not call an unreadable bearer stale on a guess', async () => {
+    const { outcome } = await renewCapturing({
+      'https://graph.microsoft.com': { bearerToken: 'not-a-jwt' },
+      'https://chatsvcagg.teams.microsoft.com': { exp: nowS() + 3000 },
+    });
+    expect((outcome as { status: string }).status).toBe('ok');
+  });
 });

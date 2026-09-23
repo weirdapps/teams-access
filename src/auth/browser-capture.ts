@@ -9,7 +9,12 @@ import {
   type AudienceToken,
 } from '../session/store';
 import { decodeJwt } from '../session/jwt';
-import { evictNearExpiryInPage, harvestMsalTokens, readEvictionReport } from './msal-harvest';
+import {
+  harvestMsalTokens,
+  installRenewEviction,
+  reportEvictions,
+  wireFloorGuard,
+} from './msal-harvest';
 import { ExitCode, ExitWithCode } from '../util/exit-codes';
 
 /** The cache harvest's own skew when no floor is set: drop only tokens already dying. */
@@ -441,31 +446,9 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
   // off for an interactive login, whose job is to get ANY session back.
   const harvestSkewS = opts.captureFloorTtlS ?? DEFAULT_HARVEST_SKEW_S;
   const floorS = opts.captureFloorTtlS ?? 0;
-  /** Seconds left on a wire token when it is under the floor, else undefined. */
-  const underFloor = (token: string): number | undefined => {
-    if (floorS <= 0) return undefined;
-    try {
-      const exp = decodeJwt(token).exp;
-      if (typeof exp !== 'number') return undefined;
-      const left = exp - Math.floor(Date.now() / 1000);
-      return left < floorS ? left : undefined;
-    } catch {
-      return undefined;
-    }
-  };
-  const refusedOnWire = new Set<string>();
-  /** True when a wire token is under the floor; says so once per audience. */
-  const refuseOnWire = (token: string, aud: string): boolean => {
-    const left = underFloor(token);
-    if (left === undefined) return false;
-    if (!refusedOnWire.has(aud)) {
-      refusedOnWire.add(aud);
-      process.stderr.write(
-        `[wire] not capturing aud=${aud}: ${left}s left, under the ${floorS}s renew floor\n`,
-      );
-    }
-    return true;
-  };
+  // True for a wire bearer under the floor, which is neither captured nor
+  // allowed to settle the login. Never refuses when there is no floor.
+  const refuseOnWire = wireFloorGuard(floorS);
 
   try {
     context = await chromium.launchPersistentContext(opts.profileDir ?? '', {
@@ -475,18 +458,8 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
     });
 
     // Take near-expiry tokens out of every origin's cache BEFORE the SPA's own
-    // scripts run, on every navigation, so it has to mint fresh ones. An init
-    // script rather than evict-then-reload: it costs no extra page load, and the
-    // renew budget (first bearer + 40s) already cuts the navigation list short.
-    if (opts.evictBelowTtlS && opts.evictBelowTtlS > 0) {
-      await context.addInitScript(evictNearExpiryInPage, {
-        minTtlSeconds: opts.evictBelowTtlS,
-      });
-      process.stderr.write(
-        `[msal-cache] renew: evicting cached access tokens with under ${opts.evictBelowTtlS}s ` +
-          `left before each page boots, and capturing nothing under ${floorS}s\n`,
-      );
-    }
+    // scripts run, on every navigation, so it has to mint fresh ones.
+    await installRenewEviction(context, opts.evictBelowTtlS ?? 0, floorS);
 
     // Capture strategy (Path B): grab the FIRST Bearer of any audience and resolve.
     // The diagnostic window collects more audiences after that; the multi-token
@@ -699,19 +672,12 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
     };
 
     const page = await context.newPage();
-    // Say what the init script took out of each document's cache. The audience
-    // and the life it had left, never the token.
-    const reportEvictions = async (where: string): Promise<void> => {
-      if (!opts.evictBelowTtlS) return;
-      const evicted = await readEvictionReport(page);
-      if (!evicted.length) return;
-      process.stderr.write(
-        `[msal-cache] evicted ${evicted.length} near-expiry token(s) on ${where} so the SPA ` +
-          `mints fresh ones: ${evicted.map((e) => `${e.aud} (${e.ttlSeconds}s left)`).join(', ')}\n`,
-      );
-    };
+    // What the init script took out of each document's cache: the audience and
+    // the life it had left, never the token.
+    const evictedOn = (where: string) =>
+      opts.evictBelowTtlS ? reportEvictions(page, where) : Promise.resolve();
     await page.goto(TEAMS_ROOT);
-    await reportEvictions(TEAMS_ROOT);
+    await evictedOn(TEAMS_ROOT);
 
     // For an interactive login, go to the MCAS origin instead of the canonical
     // one, because only the MCAS origin tells the truth about the session.
@@ -955,7 +921,7 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
             process.stderr.write(`[teams-cli login] headless: navigating to ${url}\n`);
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
             await page.waitForTimeout(settleMs);
-            await reportEvictions(url);
+            await evictedOn(url);
             // Clicking the Teams app rail is what actually provokes Graph.
             // Measured 2026-09-02: NAVIGATION ALONE IS NOT ENOUGH. Loading
             // teams.microsoft.com/v2/?view=Calendar and ?view=Files headlessly,
