@@ -232,3 +232,107 @@ describe('runAuthRenew holds the browser lock', () => {
     expect(fs.existsSync(lockPath())).toBe(true);
   });
 });
+
+// A renewal that hands back a bearer about to die is worse than one that fails:
+// the producer pushes it, the VPS reads it as fresh, and it expires before the
+// next push lands. Measured 2026-09-22/23, 4 of 4 teams-session outages on the
+// VPS followed a push whose shortest required audience had 250-640s left. The
+// capture now evicts near-expiry tokens so the SPA mints fresh ones, and the
+// command refuses to call a renewal ok while a required audience is still
+// under the floor the producer's dead-man switch uses (900s).
+describe('runAuthRenew refuses a stale capture', () => {
+  let home: string;
+  let originalHome: string | undefined;
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    originalHome = process.env.HOME;
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'teams-renew-stale-'));
+    process.env.HOME = home;
+  });
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  const nowS = () => Math.floor(Date.now() / 1000);
+
+  function jwt(aud: string, exp: number): string {
+    const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    return `${b64({ alg: 'none' })}.${b64({ aud, exp })}.sig`;
+  }
+
+  async function renewCapturing(tokens: Record<string, unknown>) {
+    const { captureSession } = await import('../../src/auth/browser-capture');
+    const { readSession } = await import('../../src/session/store');
+    vi.mocked(readSession).mockReturnValue({ tokens: {} } as never);
+    vi.mocked(captureSession).mockResolvedValue({ tokens, account: {} } as never);
+    const { runAuthRenew } = await import('../../src/commands/auth-renew');
+    const outcome = await runAuthRenew().then(
+      (r) => r,
+      (e: unknown) => e as ExitWithCode,
+    );
+    return { outcome, captureSession: vi.mocked(captureSession) };
+  }
+
+  it('asks the capture to evict near-expiry tokens and to capture nothing under the floor', async () => {
+    const { captureSession } = await renewCapturing({
+      'https://graph.microsoft.com': { exp: nowS() + 4000 },
+      'https://chatsvcagg.teams.microsoft.com': { exp: nowS() + 4000 },
+    });
+    const opts = captureSession.mock.calls[0][0];
+    expect(opts.headless).toBe(true);
+    expect(opts.evictBelowTtlS).toBe(1500);
+    expect(opts.captureFloorTtlS).toBe(900);
+    // Evicting above the floor is what leaves room for a missed push: a token
+    // kept at 1499s still outlives one 900s push interval.
+    expect(opts.evictBelowTtlS!).toBeGreaterThan(opts.captureFloorTtlS!);
+  });
+
+  it('exits AuthRequired when a required audience comes back under the floor', async () => {
+    const graph = jwt('https://graph.microsoft.com', nowS() + 300);
+    const { outcome } = await renewCapturing({
+      'https://graph.microsoft.com': { bearerToken: graph, exp: nowS() + 300 },
+      'https://chatsvcagg.teams.microsoft.com': { exp: nowS() + 4000 },
+    });
+    const thrown = outcome as ExitWithCode;
+    expect(thrown?.code).toBe(ExitCode.AuthRequired);
+    expect(thrown?.payload.code).toBe('auth_renew_stale');
+    const stale = thrown?.payload.staleAudiences as Array<{ aud: string; ttlSeconds: number }>;
+    expect(stale.map((s) => s.aud)).toEqual(['https://graph.microsoft.com']);
+    expect(stale[0].ttlSeconds).toBeGreaterThan(290);
+    expect(stale[0].ttlSeconds).toBeLessThanOrEqual(300);
+    // Named and dated, never shown.
+    expect(JSON.stringify(thrown?.payload)).not.toContain(graph);
+  });
+
+  it('reads the expiry off the JWT when the entry does not carry one', async () => {
+    const { outcome } = await renewCapturing({
+      'https://graph.microsoft.com': { exp: nowS() + 4000 },
+      'https://chatsvcagg.teams.microsoft.com': {
+        bearerToken: jwt('https://chatsvcagg.teams.microsoft.com', nowS() + 120),
+      },
+    });
+    expect((outcome as ExitWithCode)?.payload.code).toBe('auth_renew_stale');
+  });
+
+  it('still persists what it captured before refusing, as the incomplete gate does', async () => {
+    const { writeSession } = await import('../../src/session/store');
+    await renewCapturing({
+      'https://graph.microsoft.com': { exp: nowS() + 100 },
+      'https://chatsvcagg.teams.microsoft.com': { exp: nowS() + 4000 },
+    });
+    expect(vi.mocked(writeSession)).toHaveBeenCalledOnce();
+  });
+
+  it('passes a fresh capture, and one whose expiry it cannot read', async () => {
+    const { outcome } = await renewCapturing({
+      'https://graph.microsoft.com': { exp: nowS() + 3000 },
+      'https://chatsvcagg.teams.microsoft.com': {},
+    });
+    expect((outcome as { status: string }).status).toBe('ok');
+  });
+});

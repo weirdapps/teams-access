@@ -9,8 +9,11 @@ import {
   type AudienceToken,
 } from '../session/store';
 import { decodeJwt } from '../session/jwt';
-import { harvestMsalTokens } from './msal-harvest';
+import { evictNearExpiryInPage, harvestMsalTokens, readEvictionReport } from './msal-harvest';
 import { ExitCode, ExitWithCode } from '../util/exit-codes';
+
+/** The cache harvest's own skew when no floor is set: drop only tokens already dying. */
+const DEFAULT_HARVEST_SKEW_S = 120;
 
 // Teams web moved to the cloud.microsoft domain, the same consolidation that
 // produced m365.cloud.microsoft (already in the nav list below). teams.microsoft.com
@@ -69,6 +72,19 @@ export interface CaptureOptions {
    * Bearer tokens without user interaction. Used by `teams-cli auth-renew`.
    */
   headless?: boolean;
+  /**
+   * Renewal only. Before every document boots, evict cached MSAL access tokens
+   * with fewer than this many seconds left, so the SPA mints fresh ones from
+   * its refresh token instead of the capture copying a token about to die. See
+   * `evictNearExpiryInPage`. Unset (interactive login): nothing is evicted.
+   */
+  evictBelowTtlS?: number;
+  /**
+   * Renewal only. Never capture a token with fewer than this many seconds left,
+   * from the wire or from the cache. Unset: the cache keeps its 120s skew and
+   * the wire takes whatever it sees, as before.
+   */
+  captureFloorTtlS?: number;
 }
 
 export interface CapturedTokenInfo {
@@ -421,12 +437,56 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
     /* ignore */
   }
 
+  // A renewal must hand back tokens that outlive the next push. Both limits are
+  // off for an interactive login, whose job is to get ANY session back.
+  const harvestSkewS = opts.captureFloorTtlS ?? DEFAULT_HARVEST_SKEW_S;
+  const floorS = opts.captureFloorTtlS ?? 0;
+  /** Seconds left on a wire token when it is under the floor, else undefined. */
+  const underFloor = (token: string): number | undefined => {
+    if (floorS <= 0) return undefined;
+    try {
+      const exp = decodeJwt(token).exp;
+      if (typeof exp !== 'number') return undefined;
+      const left = exp - Math.floor(Date.now() / 1000);
+      return left < floorS ? left : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const refusedOnWire = new Set<string>();
+  /** True when a wire token is under the floor; says so once per audience. */
+  const refuseOnWire = (token: string, aud: string): boolean => {
+    const left = underFloor(token);
+    if (left === undefined) return false;
+    if (!refusedOnWire.has(aud)) {
+      refusedOnWire.add(aud);
+      process.stderr.write(
+        `[wire] not capturing aud=${aud}: ${left}s left, under the ${floorS}s renew floor\n`,
+      );
+    }
+    return true;
+  };
+
   try {
     context = await chromium.launchPersistentContext(opts.profileDir ?? '', {
       channel: opts.chromeChannel,
       headless: opts.headless ?? false,
       viewport: null,
     });
+
+    // Take near-expiry tokens out of every origin's cache BEFORE the SPA's own
+    // scripts run, on every navigation, so it has to mint fresh ones. An init
+    // script rather than evict-then-reload: it costs no extra page load, and the
+    // renew budget (first bearer + 40s) already cuts the navigation list short.
+    if (opts.evictBelowTtlS && opts.evictBelowTtlS > 0) {
+      await context.addInitScript(evictNearExpiryInPage, {
+        minTtlSeconds: opts.evictBelowTtlS,
+      });
+      process.stderr.write(
+        `[msal-cache] renew: evicting cached access tokens with under ${opts.evictBelowTtlS}s ` +
+          `left before each page boots, and capturing nothing under ${floorS}s\n`,
+      );
+    }
 
     // Capture strategy (Path B): grab the FIRST Bearer of any audience and resolve.
     // The diagnostic window collects more audiences after that; the multi-token
@@ -482,7 +542,11 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
           if (log.audience && log.audience !== '?' && !tokensByAud.has(log.audience)) {
             const headers = req.headers();
             const auth = headers['authorization'] ?? headers['Authorization'];
-            if (auth && auth.startsWith('Bearer ')) {
+            if (
+              auth &&
+              auth.startsWith('Bearer ') &&
+              !refuseOnWire(auth.slice(7).trim(), log.audience)
+            ) {
               const tok = auth.slice(7).trim();
               let exp: number | undefined;
               let scp: string | undefined;
@@ -543,7 +607,9 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
         // at a time across multiple navigation steps.
         const minAud = opts.minAudiences ?? 1;
         const info = extractBearerFromRequest(req);
-        if (info && !primaryResolved) {
+        // A renewal settles only on a token that outlives the next push; a
+        // near-expiry one seen first must not become the session's primary.
+        if (info && !primaryResolved && !refuseOnWire(info.bearerToken, info.aud ?? '?')) {
           if (tokensByAud.size < minAud) {
             process.stderr.write(
               `[waiting] aud=${info.aud} (${tokensByAud.size}/${minAud} audiences — need more)\n`,
@@ -633,7 +699,19 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
     };
 
     const page = await context.newPage();
+    // Say what the init script took out of each document's cache. The audience
+    // and the life it had left, never the token.
+    const reportEvictions = async (where: string): Promise<void> => {
+      if (!opts.evictBelowTtlS) return;
+      const evicted = await readEvictionReport(page);
+      if (!evicted.length) return;
+      process.stderr.write(
+        `[msal-cache] evicted ${evicted.length} near-expiry token(s) on ${where} so the SPA ` +
+          `mints fresh ones: ${evicted.map((e) => `${e.aud} (${e.ttlSeconds}s left)`).join(', ')}\n`,
+      );
+    };
     await page.goto(TEAMS_ROOT);
+    await reportEvictions(TEAMS_ROOT);
 
     // For an interactive login, go to the MCAS origin instead of the canonical
     // one, because only the MCAS origin tells the truth about the session.
@@ -692,7 +770,7 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       void (async () => {
         if (primaryResolved) return;
         try {
-          mergeHarvest(await harvestMsalTokens(page));
+          mergeHarvest(await harvestMsalTokens(page, harvestSkewS));
         } catch {
           /* page navigating or closed; the next tick retries */
         }
@@ -799,7 +877,7 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
         // Let the SPA settle and write its MSAL cache before we move on.
         await page.waitForTimeout(8000);
         try {
-          mergeHarvest(await harvestMsalTokens(page));
+          mergeHarvest(await harvestMsalTokens(page, harvestSkewS));
         } catch {
           /* the poller and the nav sequence are the fallbacks */
         }
@@ -877,6 +955,7 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
             process.stderr.write(`[teams-cli login] headless: navigating to ${url}\n`);
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
             await page.waitForTimeout(settleMs);
+            await reportEvictions(url);
             // Clicking the Teams app rail is what actually provokes Graph.
             // Measured 2026-09-02: NAVIGATION ALONE IS NOT ENOUGH. Loading
             // teams.microsoft.com/v2/?view=Calendar and ?view=Files headlessly,
@@ -897,7 +976,7 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
             // valid Teams tokens sat one origin behind it. Each surface also
             // keeps its own cache, so sweeping every origin is what collects
             // Teams, Outlook and the M365 shell audiences in one pass.
-            const here = await harvestMsalTokens(page);
+            const here = await harvestMsalTokens(page, harvestSkewS);
             if (here.length) mergeHarvest(here);
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
@@ -907,7 +986,7 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
 
         // Final sweep, for the last origin visited.
         try {
-          mergeHarvest(await harvestMsalTokens(page));
+          mergeHarvest(await harvestMsalTokens(page, harvestSkewS));
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           process.stderr.write(`[msal-cache] harvest failed: ${msg}\n`);
