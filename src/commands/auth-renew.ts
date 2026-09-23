@@ -15,7 +15,8 @@ import { homedir } from 'node:os';
 
 import { captureSession } from '../auth/browser-capture';
 import { acquireLock } from '../auth/lock';
-import { readSession, writeSession, type Session } from '../session/store';
+import { decodeJwt } from '../session/jwt';
+import { readSession, writeSession, type AudienceToken, type Session } from '../session/store';
 import { ExitCode, ExitWithCode, type ExitCodeValue } from '../util/exit-codes';
 
 /** Default headless renewal timeout. Headless mode drives 4 navigations
@@ -46,6 +47,43 @@ const REQUIRED_AUDIENCES = [
   'https://graph.microsoft.com',
   'https://chatsvcagg.teams.microsoft.com',
 ] as const;
+
+/**
+ * The shortest life a required audience may leave this command with, in
+ * seconds. It is the producer's own gate: `sync-tokens-to-vps.sh` withholds its
+ * dead-man ping below DEADMAN_MIN_TTL=900, because a bearer with less than one
+ * 15-minute push interval left expires on the VPS before the next push lands.
+ * Nothing under it is captured as fresh (wire or cache), and a required
+ * audience still under it fails the renewal instead of passing as ok.
+ */
+export const RENEW_FLOOR_TTL_S = 900;
+
+/**
+ * Cached access tokens with less life than this are evicted before each page
+ * boots, so the SPA mints fresh ones (see `evictNearExpiryInPage`). Above the
+ * floor on purpose: a token kept at 1499s still outlives one push interval,
+ * which is the margin for a push that fails on a bad network. Measured
+ * 2026-09-23, the capture's required-audience TTL fell 5049, 4047, 3046, 2047,
+ * 1046 across five runs: the same token, copied down. With this the fifth run
+ * re-mints instead, so a ~5000s token serves four pushes and the shortest one
+ * delivered stays above 1500s rather than reaching the 250-640s that failed.
+ */
+export const RENEW_EVICT_BELOW_TTL_S = 1500;
+
+/** Seconds of life left on a session token, or undefined when it cannot be read. */
+function secondsLeft(token: AudienceToken | undefined, nowS: number): number | undefined {
+  if (!token) return undefined;
+  let exp = typeof token.exp === 'number' ? token.exp : undefined;
+  if (exp === undefined && typeof token.bearerToken === 'string') {
+    try {
+      const claimed = decodeJwt(token.bearerToken).exp;
+      exp = typeof claimed === 'number' ? claimed : undefined;
+    } catch {
+      exp = undefined;
+    }
+  }
+  return exp === undefined ? undefined : exp - nowS;
+}
 
 export interface AuthRenewOptions {
   /** Override the renew-specific timeout (default 30000ms). */
@@ -150,6 +188,8 @@ async function captureAndValidate(
       profileDir: opts.profileDir ?? defaultProfileDir(),
       headless: true,
       diagnosticExtraMs: DEFAULT_DIAGNOSTIC_EXTRA_MS,
+      evictBelowTtlS: RENEW_EVICT_BELOW_TTL_S,
+      captureFloorTtlS: RENEW_FLOOR_TTL_S,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -191,6 +231,31 @@ async function captureAndValidate(
         `Run \`teams-cli login\` interactively (open the Chat tab in the diagnostic window).`,
       capturedAudiences,
       missingAudiences: missing,
+    });
+  }
+
+  // Present is not the same as alive. A required audience can only be under
+  // the floor here if no fresh copy was captured and the prior session's own
+  // token was carried forward (the capture refuses to take a new one that
+  // short), so this is a renewal that did not renew. Exiting ok used to let the
+  // producer push it anyway, and the VPS lost Teams 12-16 minutes later.
+  // AuthRequired to match the incomplete gate above: both mean the caller's
+  // credentials are about to stop working. The token itself is never reported.
+  const nowS = Math.floor(Date.now() / 1000);
+  const stale = REQUIRED_AUDIENCES.flatMap((aud) => {
+    const ttl = secondsLeft(captured.tokens?.[aud], nowS);
+    return ttl !== undefined && ttl < RENEW_FLOOR_TTL_S ? [{ aud, ttlSeconds: ttl }] : [];
+  });
+  if (stale.length > 0) {
+    throw new ExitWithCode(ExitCode.AuthRequired, {
+      code: 'auth_renew_stale',
+      message:
+        `Headless renewal could not mint a fresh token for ` +
+        stale.map((s) => `${s.aud} (${s.ttlSeconds}s left)`).join(', ') +
+        `: under the ${RENEW_FLOOR_TTL_S}s floor, a bearer expires on the VPS before the ` +
+        `next 15-minute push. Near-expiry tokens are evicted so the page re-mints them, and ` +
+        `this run captured no fresh copy. If this persists, run \`teams-cli login\`.`,
+      staleAudiences: stale,
     });
   }
 
