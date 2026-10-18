@@ -13,6 +13,7 @@ import { runListMessages } from './commands/list-messages';
 import { runSendMessage } from './commands/send-message';
 import { runHealthCheck } from './commands/health-check';
 import { runResolveMri } from './commands/resolve-mri';
+import { parseAddressInput, runLookupUsers } from './commands/lookup-users';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -37,6 +38,12 @@ function loadSessionOrThrow(): Session {
     });
   }
   return s;
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 function commonConfig(): { httpTimeoutMs: number } {
@@ -155,6 +162,17 @@ program
   .action(async (mri: string) => {
     const session = loadSessionOrThrow();
     const result = await runResolveMri({ session, ...commonConfig(), mri });
+    writeJson(result);
+  });
+
+program
+  .command('lookup-users [addresses...]')
+  .description('Look up users by address via Graph $batch: job title, department, office, manager')
+  .option('--stdin', 'Also read addresses from stdin, one per line')
+  .action(async (addresses: string[], cmd) => {
+    const parsed = parseAddressInput(addresses, cmd.stdin ? await readStdin() : undefined);
+    const session = loadSessionOrThrow();
+    const result = await runLookupUsers({ session, ...commonConfig(), addresses: parsed });
     writeJson(result);
   });
 

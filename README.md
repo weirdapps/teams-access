@@ -25,20 +25,21 @@ Sister project: [`outlook-access`](https://github.com/weirdapps/outlook-access) 
 
 ## CLI commands
 
-Ten subcommands, all listed by `teams-cli --help`:
+Eleven subcommands, all listed by `teams-cli --help`:
 
-| Command         | Backend                                | Purpose                                                       |
-| --------------- | -------------------------------------- | ------------------------------------------------------------- |
-| `login`         | Playwright capture                     | Interactive sign-in, persists per-audience Bearers            |
-| `auth-check`    | Graph `/me`                            | Graph token only. See the caveat below before trusting it     |
-| `auth-renew`    | Playwright headless                    | Silent re-issue against the persisted profile                 |
-| `list-teams`    | Graph `/me/joinedTeams`                | Teams you belong to                                           |
-| `list-channels` | Graph `/teams/{id}/channels`           | Single team (`--team-id`) or fan out (`--all-teams`)          |
-| `list-chats`    | chatsvcagg `/updates`                  | 1:1, group, meeting chats with last message preview           |
-| `list-messages` | chatsvc (chat) or chatsvcagg (channel) | Messages of `--chat <id>` OR `--team <uuid> --channel <id>`   |
-| `resolve-mri`   | Graph `/users/{aad-oid}`               | Translate `8:orgid:<oid>` to `{id, email, displayName}`       |
-| `send-message`  | Graph `POST /chats/{id}/messages`      | Send to a chat. Channel sends fail (scope missing)            |
-| `health-check`  | one probe per client                   | Graph + chatsvc + chatsvcagg. Exit 5 on broken, 1 on degraded |
+| Command         | Backend                                 | Purpose                                                       |
+| --------------- | --------------------------------------- | ------------------------------------------------------------- |
+| `login`         | Playwright capture                      | Interactive sign-in, persists per-audience Bearers            |
+| `auth-check`    | Graph `/me`                             | Graph token only. See the caveat below before trusting it     |
+| `auth-renew`    | Playwright headless                     | Silent re-issue against the persisted profile                 |
+| `list-teams`    | Graph `/me/joinedTeams`                 | Teams you belong to                                           |
+| `list-channels` | Graph `/teams/{id}/channels`            | Single team (`--team-id`) or fan out (`--all-teams`)          |
+| `list-chats`    | chatsvcagg `/updates`                   | 1:1, group, meeting chats with last message preview           |
+| `list-messages` | chatsvc (chat) or chatsvcagg (channel)  | Messages of `--chat <id>` OR `--team <uuid> --channel <id>`   |
+| `resolve-mri`   | Graph `/users/{aad-oid}`                | Translate `8:orgid:<oid>` to `{id, email, displayName}`       |
+| `lookup-users`  | Graph `POST /$batch` of `/users/{addr}` | Job title, department, office and manager per address         |
+| `send-message`  | Graph `POST /chats/{id}/messages`       | Send to a chat. Channel sends fail (scope missing)            |
+| `health-check`  | one probe per client                    | Graph + chatsvc + chatsvcagg. Exit 5 on broken, 1 on degraded |
 
 All subcommands accept the global flags `--timeout <ms>`, `--login-timeout <ms>`, and `--chrome-channel <name>`. `--login-timeout` only affects `login`. The CLI also accepts `--no-auto-reauth`, but that flag is currently a no-op: no auto-reauth is implemented, and every command fails with `auth_required` (exit 4) on an expired session rather than reopening a browser.
 
@@ -60,6 +61,48 @@ $ teams-cli health-check
 ```
 
 Use `health-check` whenever you need to know whether the session actually works. It probes all four reads and is the only command that can fail on a dead `chatsvc` or `chatsvcagg` token. Treat `auth-check` as "is the Graph token alive", nothing more.
+
+### `lookup-users`
+
+```bash
+teams-cli lookup-users -- alice@example.com bob@example.com
+printf 'alice@example.com\nbob@example.com\n' | teams-cli lookup-users --stdin
+```
+
+Addresses come as arguments, or one per line on stdin with `--stdin` (both may be combined). Put options before a `--` and addresses after it, so an address can never be read as an option: `teams-cli lookup-users --no-auto-reauth -- <addresses...>`. Addresses are trimmed, lower-cased and de-duplicated, blanks are skipped, and more than 5,000 distinct addresses in one call is refused with `invalid_input` (exit 2). An address that starts with `-`, or holds anything but letters, digits and `. _ % + ' @ -`, is reported as `error` for that entry and never sent to Graph. Output is one entry per distinct address, in input order:
+
+```json
+{
+  "users": [
+    {
+      "query": "alice@example.com",
+      "status": "ok",
+      "id": "00000000-0000-0000-0000-000000000000",
+      "displayName": "Alice Example",
+      "mail": "alice@example.com",
+      "userPrincipalName": "alice@example.com",
+      "jobTitle": "Analyst",
+      "department": "Payments",
+      "officeLocation": "Floor 3",
+      "companyName": "Example Co",
+      "accountEnabled": true,
+      "manager": { "displayName": "Bob Example", "mail": "bob@example.com", "jobTitle": "Head" }
+    },
+    { "query": "nobody@example.com", "status": "not_found" },
+    {
+      "query": "busy@example.com",
+      "status": "error",
+      "error": "Graph 429 ...: ... (still throttled after 3 retries)"
+    }
+  ]
+}
+```
+
+A field Graph does not return is `null`, and `manager` is `null` when the user has none. How it looks each address up:
+
+1. `GET /users/{addr}` with the fields above and `$expand=manager`, 20 addresses per `POST /$batch`
+2. An address that answers 404 is tried again as an alias: `GET /users?$filter=proxyAddresses/any(p:p eq 'smtp:{addr}')` with `ConsistencyLevel: eventual`, then the match's manager in a follow-up `/users/{id}?$expand=manager`. No match is `not_found`
+3. An item answered 429 or 503 inside a batch is retried on its own after its `Retry-After` (capped at 30 seconds), up to 3 times, then reported as `error`. One failed item never fails the call; a whole-call 401 exits 4 `auth_required` and any other whole-call Graph error exits 5 `upstream`
 
 ## MCP tools
 
@@ -146,6 +189,7 @@ node dist/cli.js list-chats --limit 10
 node dist/cli.js list-messages --chat 19:...@thread.v2 --page-size 20
 node dist/cli.js send-message --chat 19:...@thread.v2 --text "hello"
 node dist/cli.js resolve-mri 8:orgid:00000000-0000-0000-0000-000000000000
+node dist/cli.js lookup-users -- alice@example.com bob@example.com
 ```
 
 Silent renewal (drives the persisted Playwright profile headlessly, works while the `ESTSAUTHPERSISTENT` cookie inside the persisted profile is valid):
@@ -260,7 +304,7 @@ On failure, a single-line JSON error payload is written to stderr, for example `
 
 ```bash
 npm run build            # tsc && chmod +x dist/cli.js
-npm test                 # vitest run (52 tests across 13 files)
+npm test                 # vitest run (123 tests across 18 files)
 npm run test:watch       # vitest interactive
 npm run test:coverage    # vitest run --coverage (v8 provider, lcov output)
 npm run lint             # eslint
