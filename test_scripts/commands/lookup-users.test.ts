@@ -1,5 +1,9 @@
 // test_scripts/commands/lookup-users.test.ts
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { parseAddressInput, runLookupUsers } from '../../src/commands/lookup-users';
 import { ExitWithCode } from '../../src/util/exit-codes';
 import type { Session } from '../../src/session/store';
@@ -446,4 +450,158 @@ describe('runLookupUsers', () => {
     ).rejects.toThrow(/no addresses/i);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  it('reports a malformed address as error per item and never sends it to Graph', async () => {
+    const { batches } = installGraph((req) => ({
+      status: 200,
+      body: userFor(directAddress(req.url) ?? ''),
+    }));
+    const bad = [
+      '-rf@example.com',
+      '--stdin',
+      'two words@example.com',
+      'tab\there@example.com',
+      'semi;colon@example.com',
+      'slash/x@example.com',
+      '<angle>@example.com',
+    ];
+
+    const { users } = await runLookupUsers({
+      session: fakeSession,
+      httpTimeoutMs: 1000,
+      addresses: ['ok@example.com', ...bad, "o'neil+tag_1%x@example.com"],
+      sleep: noSleep(),
+    });
+
+    expect(users.map((u) => [u.query, u.status])).toEqual([
+      ['ok@example.com', 'ok'],
+      ...bad.map((b) => [b, 'error']),
+      ["o'neil+tag_1%x@example.com", 'ok'],
+    ]);
+    expect(users[1]).toEqual({
+      query: '-rf@example.com',
+      status: 'error',
+      error: expect.stringMatching(/^invalid address/),
+    });
+    expect(batches.flat().map((r) => directAddress(r.url))).toEqual([
+      'ok@example.com',
+      "o'neil+tag_1%x@example.com",
+    ]);
+  });
+
+  it('makes no Graph call when every address is malformed', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const { users } = await runLookupUsers({
+      session: fakeSession,
+      httpTimeoutMs: 1000,
+      addresses: ['-x@example.com'],
+      sleep: noSleep(),
+    });
+
+    expect(users.map((u) => u.status)).toEqual(['error']);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+// The consumer runs `teams-cli lookup-users --no-auto-reauth -- <addresses...>`,
+// so the "--" keeps an address from ever being read as an option. These run the
+// real CLI from source in a child process, with a fake Graph preloaded.
+describe('teams-cli lookup-users (child process)', () => {
+  const repoRoot = resolve(__dirname, '..', '..');
+  let home: string;
+  let graphLog: string;
+  let preload: string;
+
+  beforeAll(() => {
+    home = mkdtempSync(join(tmpdir(), 'lookup-users-cli-'));
+    mkdirSync(join(home, '.teams-cli'), { mode: 0o700 });
+    writeFileSync(
+      join(home, '.teams-cli', 'session.json'),
+      JSON.stringify({ bearerToken: 'fake', cookies: [], capturedAt: '2026-10-18T10:00:00Z' }),
+      { mode: 0o600 },
+    );
+    graphLog = join(home, 'graph.log');
+    preload = join(home, 'fake-graph.js');
+    writeFileSync(
+      preload,
+      `const fs = require('node:fs');
+globalThis.fetch = async (_url, init) => {
+  const { requests } = JSON.parse(init.body);
+  const responses = requests.map((r) => {
+    fs.appendFileSync(process.env.FAKE_GRAPH_LOG, r.url + '\\n');
+    const m = /^\\/users\\/([^?]+)\\?\\$select=id,displayName/.exec(r.url);
+    if (!m) return { id: r.id, status: 200, body: { value: [] } };
+    const addr = decodeURIComponent(m[1]);
+    return { id: r.id, status: 200, body: { id: 'id-' + addr, mail: addr, displayName: addr } };
+  });
+  return new Response(JSON.stringify({ responses }), { status: 200 });
+};
+`,
+    );
+  });
+
+  afterAll(() => rmSync(home, { recursive: true, force: true }));
+
+  beforeEach(() => writeFileSync(graphLog, ''));
+
+  function cli(args: string[]): { status: number | null; stdout: string; stderr: string } {
+    const r = spawnSync(
+      process.execPath,
+      ['-r', 'ts-node/register/transpile-only', '-r', preload, 'src/cli.ts', ...args],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: { ...process.env, HOME: home, FAKE_GRAPH_LOG: graphLog },
+      },
+    );
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  }
+
+  it('accepts the global flag before "--" and treats everything after it as addresses', () => {
+    const r = cli([
+      'lookup-users',
+      '--no-auto-reauth',
+      '--',
+      'a@example.com',
+      '-b@example.com',
+      '--stdin',
+      'c d@example.com',
+      'A@EXAMPLE.COM',
+      'e@example.com',
+    ]);
+
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    const { users } = JSON.parse(r.stdout) as { users: { query: string; status: string }[] };
+    expect(users.map((u) => [u.query, u.status])).toEqual([
+      ['a@example.com', 'ok'],
+      ['-b@example.com', 'error'],
+      ['--stdin', 'error'],
+      ['c d@example.com', 'error'],
+      ['e@example.com', 'ok'],
+    ]);
+    const sent = readFileSync(graphLog, 'utf8').trim().split('\n');
+    expect(sent.map((u) => decodeURIComponent(u.split('?')[0]))).toEqual([
+      '/users/a@example.com',
+      '/users/e@example.com',
+    ]);
+  }, 20_000);
+
+  it('exits 2 invalid_input when "--" is followed by nothing', () => {
+    const r = cli(['lookup-users', '--no-auto-reauth', '--']);
+
+    expect(r.status).toBe(2);
+    expect(JSON.parse(r.stderr)).toEqual(expect.objectContaining({ code: 'invalid_input' }));
+    expect(readFileSync(graphLog, 'utf8')).toBe('');
+  }, 20_000);
+
+  it('without "--", refuses a dash-led address as an unknown option', () => {
+    const r = cli(['lookup-users', '--no-auto-reauth', '-b@example.com']);
+
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toMatch(/unknown option/);
+    expect(readFileSync(graphLog, 'utf8')).toBe('');
+  }, 20_000);
 });

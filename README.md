@@ -65,11 +65,11 @@ Use `health-check` whenever you need to know whether the session actually works.
 ### `lookup-users`
 
 ```bash
-teams-cli lookup-users alice@example.com bob@example.com
+teams-cli lookup-users -- alice@example.com bob@example.com
 printf 'alice@example.com\nbob@example.com\n' | teams-cli lookup-users --stdin
 ```
 
-Addresses come as arguments, or one per line on stdin with `--stdin` (both may be combined). They are trimmed, lower-cased and de-duplicated, blanks are skipped, and more than 5,000 distinct addresses in one call is refused with `invalid_input` (exit 2). Output is one entry per distinct address, in input order:
+Addresses come as arguments, or one per line on stdin with `--stdin` (both may be combined). Put options before a `--` and addresses after it, so an address can never be read as an option: `teams-cli lookup-users --no-auto-reauth -- <addresses...>`. Addresses are trimmed, lower-cased and de-duplicated, blanks are skipped, and more than 5,000 distinct addresses in one call is refused with `invalid_input` (exit 2). An address that starts with `-`, or holds anything but letters, digits and `. _ % + ' @ -`, is reported as `error` for that entry and never sent to Graph. Output is one entry per distinct address, in input order:
 
 ```json
 {
@@ -189,7 +189,7 @@ node dist/cli.js list-chats --limit 10
 node dist/cli.js list-messages --chat 19:...@thread.v2 --page-size 20
 node dist/cli.js send-message --chat 19:...@thread.v2 --text "hello"
 node dist/cli.js resolve-mri 8:orgid:00000000-0000-0000-0000-000000000000
-node dist/cli.js lookup-users alice@example.com bob@example.com
+node dist/cli.js lookup-users -- alice@example.com bob@example.com
 ```
 
 Silent renewal (drives the persisted Playwright profile headlessly, works while the `ESTSAUTHPERSISTENT` cookie inside the persisted profile is valid):
@@ -304,7 +304,7 @@ On failure, a single-line JSON error payload is written to stderr, for example `
 
 ```bash
 npm run build            # tsc && chmod +x dist/cli.js
-npm test                 # vitest run (118 tests across 18 files)
+npm test                 # vitest run (123 tests across 18 files)
 npm run test:watch       # vitest interactive
 npm run test:coverage    # vitest run --coverage (v8 provider, lcov output)
 npm run lint             # eslint

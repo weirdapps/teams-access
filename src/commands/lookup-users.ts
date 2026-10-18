@@ -14,6 +14,12 @@ const USER_SELECT =
   'id,displayName,mail,userPrincipalName,jobTitle,department,officeLocation,companyName,accountEnabled';
 const MANAGER_EXPAND = 'manager($select=displayName,mail,jobTitle)';
 
+// Addresses come from mail headers: anything outside this set, or a leading
+// "-", is reported per item and never sent to Graph.
+const ADDRESS_RE = /^[A-Za-z0-9._%+'@-]+$/;
+const INVALID_ADDRESS =
+  "invalid address: only letters, digits and . _ % + ' @ - are allowed, and no leading -";
+
 export interface LookupUsersOptions {
   session: Session;
   httpTimeoutMs: number;
@@ -182,11 +188,16 @@ async function lookup(
   sleep: (ms: number) => Promise<void>,
 ): Promise<LookupUserEntry[]> {
   const entries = new Map<string, LookupUserEntry>();
+  const valid: string[] = [];
+  for (const q of queries) {
+    if (!q.startsWith('-') && ADDRESS_RE.test(q)) valid.push(q);
+    else entries.set(q, { query: q, status: 'error', error: INVALID_ADDRESS });
+  }
 
   // Round 1: the address as a user id or UPN, manager expanded inline.
   const direct = await sendBatch(
     graph,
-    queries.map((q, i) => ({
+    valid.map((q, i) => ({
       id: String(i),
       method: 'GET',
       url: `/users/${encodeURIComponent(q)}?$select=${USER_SELECT}&$expand=${MANAGER_EXPAND}`,
@@ -194,7 +205,7 @@ async function lookup(
     sleep,
   );
   const missing: string[] = [];
-  queries.forEach((q, i) => {
+  valid.forEach((q, i) => {
     const r = direct.get(String(i));
     if (r?.status === 404) missing.push(q);
     else if (r?.status === 200) entries.set(q, found(q, r.body as GraphUser));
