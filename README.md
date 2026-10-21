@@ -192,6 +192,13 @@ node dist/cli.js resolve-mri 8:orgid:00000000-0000-0000-0000-000000000000
 node dist/cli.js lookup-users -- alice@example.com bob@example.com
 ```
 
+A chat read returns its newest page only, unless it is told how far back to go. `--until` (an ISO 8601 time or unix milliseconds) follows each page's `backwardLink` until a page reaches that time, at most `--max-pages` pages (default 1). The result then carries `pagesRead`, and `complete: false` when it stopped at the page cap with older messages still unread. A caller that stores messages passes the time of the newest one it holds, so a normal poll costs one page and a long outage is caught up:
+
+```bash
+node dist/cli.js list-messages --chat 19:...@thread.v2 --page-size 200 \
+  --until 2026-10-20T08:00:00Z --max-pages 10
+```
+
 Silent renewal (drives the persisted Playwright profile headlessly, works while the `ESTSAUTHPERSISTENT` cookie inside the persisted profile is valid):
 
 ```bash

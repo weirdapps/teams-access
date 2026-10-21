@@ -79,6 +79,24 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** A paging URL from a chatsvc response, checked to be on the chatsvc host. */
+function pagingUrl(link: string): string {
+  let origin = '';
+  try {
+    origin = new URL(link).origin;
+  } catch {
+    /* not an absolute URL: refused below */
+  }
+  if (origin !== new URL(HOST).origin) {
+    throw new GraphHttpError(
+      502,
+      'BadPagingLink',
+      'chatsvc returned a paging link to another host',
+    );
+  }
+  return link;
+}
+
 export class ChatsvcClient {
   private readonly region: string;
   private readonly retries: number;
@@ -186,9 +204,11 @@ export class ChatsvcClient {
     opts: { pageSize?: number; startTime?: number; syncState?: string; backwardLink?: string } = {},
   ): Promise<ChatsvcMessagesResponse> {
     // If a paging URL is provided, use it directly (Teams returns absolute URLs).
-    if (opts.syncState) return await this.request<ChatsvcMessagesResponse>('GET', opts.syncState);
+    // The request carries the IC3 bearer, so a link to any other origin is refused.
+    if (opts.syncState)
+      return await this.request<ChatsvcMessagesResponse>('GET', pagingUrl(opts.syncState));
     if (opts.backwardLink)
-      return await this.request<ChatsvcMessagesResponse>('GET', opts.backwardLink);
+      return await this.request<ChatsvcMessagesResponse>('GET', pagingUrl(opts.backwardLink));
 
     const params = new URLSearchParams();
     params.set('view', 'msnp24Equivalent|supportsMessageProperties');

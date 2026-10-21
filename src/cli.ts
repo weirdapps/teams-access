@@ -141,6 +141,15 @@ program
   .option('--team <uuid>', 'Team UUID (paired with --channel)')
   .option('--channel <id>', 'Channel id (paired with --team)')
   .option('--page-size <n>', 'Page size', (v) => Number(v), 50)
+  .option(
+    '--until <time>',
+    'Chat only: page back until a page reaches this time (ISO 8601 or unix ms)',
+  )
+  .option(
+    '--max-pages <n>',
+    'Chat only: the most pages to read (default 1); output says complete:false when it stops there',
+    (v) => Number(v),
+  )
   .action(async (cmd) => {
     const session = loadSessionOrThrow();
     const result = await runListMessages({
@@ -150,6 +159,8 @@ program
       chat: cmd.chat,
       team: cmd.team,
       channel: cmd.channel,
+      until: cmd.until,
+      maxPages: cmd.maxPages,
     });
     writeJson(result);
   });
