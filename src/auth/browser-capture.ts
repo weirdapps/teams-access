@@ -16,6 +16,7 @@ import {
   wireFloorGuard,
 } from './msal-harvest';
 import { ExitCode, ExitWithCode } from '../util/exit-codes';
+import { awaitWithin } from './nav-budget';
 
 /** The cache harvest's own skew when no floor is set: drop only tokens already dying. */
 const DEFAULT_HARVEST_SKEW_S = 120;
@@ -153,23 +154,6 @@ export function isGraphAudience(aud: string | undefined): boolean {
 export function hasRequiredAudiences(auds: Iterable<string>): boolean {
   const list = Array.from(auds);
   return list.some(isGraphAudience) && list.includes(CHATSVCAGG_AUD);
-}
-
-/**
- * Wait for the navigation loop, but never past `budgetMs`. Resolves true when
- * the loop finished, false when the budget ran out first.
- */
-export async function awaitWithin(done: Promise<unknown>, budgetMs: number): Promise<boolean> {
-  if (budgetMs <= 0) return false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<false>((r) => {
-    timer = setTimeout(() => r(false), budgetMs);
-  });
-  try {
-    return await Promise.race([done.then(() => true as const), expired]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 interface InspectedBearer {

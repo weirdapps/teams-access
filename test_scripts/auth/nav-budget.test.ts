@@ -7,7 +7,8 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { awaitWithin, hasRequiredAudiences } from '../../src/auth/browser-capture';
+import { hasRequiredAudiences } from '../../src/auth/browser-capture';
+import { awaitWithin } from '../../src/auth/nav-budget';
 
 describe('hasRequiredAudiences', () => {
   it('needs both Graph and chatsvcagg', () => {
