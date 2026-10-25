@@ -16,6 +16,7 @@ import {
   wireFloorGuard,
 } from './msal-harvest';
 import { ExitCode, ExitWithCode } from '../util/exit-codes';
+import { awaitWithin } from './nav-budget';
 
 /** The cache harvest's own skew when no floor is set: drop only tokens already dying. */
 const DEFAULT_HARVEST_SKEW_S = 120;
@@ -29,6 +30,8 @@ const DEFAULT_HARVEST_SKEW_S = 120;
 // perfectly healthy. Measured 2026-09-03, after headless renewal had been returning
 // "(none)" for days against a tenant where Teams web worked fine in a normal browser.
 const TEAMS_ROOT = 'https://teams.cloud.microsoft/';
+
+const CHATSVCAGG_AUD = 'https://chatsvcagg.teams.microsoft.com';
 
 // Both hosts, for the "is this a Teams page?" test. A redirect can leave either one
 // in the URL, and the nav list below still visits the legacy host as a fallback in
@@ -140,6 +143,17 @@ export function extractBearerFromRequest(req: PWRequest): CapturedTokenInfo | nu
 /** True if the audience claim resolves to Microsoft Graph. */
 export function isGraphAudience(aud: string | undefined): boolean {
   return aud != null && (aud === GRAPH_APPID || GRAPH_AUD_RE.test(aud));
+}
+
+/**
+ * True once both audiences a renewal needs (Graph and chatsvcagg) are in hand.
+ * Mirrors REQUIRED_AUDIENCES in commands/auth-renew.ts; the navigation loop
+ * stops early on it, so a renewal that already has them does not sit through
+ * the remaining surfaces.
+ */
+export function hasRequiredAudiences(auds: Iterable<string>): boolean {
+  const list = Array.from(auds);
+  return list.some(isGraphAudience) && list.includes(CHATSVCAGG_AUD);
 }
 
 interface InspectedBearer {
@@ -850,6 +864,14 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       }
     }
 
+    // The loop is awaited (within this budget) before the context closes. Left
+    // fire-and-forget, the 40s diagnostic window closed the browser while it was
+    // still on the Teams Calendar view, so the Outlook /mail/ Graph provoker never
+    // ran: every renewal on 2026-10-25 logged "Target page, context or browser has
+    // been closed" for it and everything after it.
+    const navDeadline = Date.now() + opts.loginTimeoutMs;
+    let navStop = false;
+    let navDone: Promise<void> = Promise.resolve();
     {
       // Run navigations in a non-blocking IIFE so the `await captured` below
       // still drives the timeout/resolve loop. We only need the navigations to
@@ -867,7 +889,7 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       //   2. outlook.office.com     — provokes Graph + outlook audiences.
       //   3. www.office.com         — catches presence + remaining tenant
       //                                surfaces.
-      void (async () => {
+      navDone = (async () => {
         for (const { url, settleMs } of [
           // MCAS origin first: on a proxied tenant this is where the live session
           // and its storage actually are, and it is the only one that reveals a
@@ -917,6 +939,13 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
           { url: 'https://m365.cloud.microsoft/', settleMs: 10000 },
           { url: 'https://www.office.com/', settleMs: 5000 },
         ]) {
+          if (navStop) break;
+          if (primaryResolved && hasRequiredAudiences(tokensByAud.keys())) {
+            process.stderr.write(
+              `[teams-cli login] required audiences in hand, skipping the remaining surfaces\n`,
+            );
+            break;
+          }
           try {
             process.stderr.write(`[teams-cli login] headless: navigating to ${url}\n`);
             await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -993,6 +1022,16 @@ export async function captureSession(opts: CaptureOptions): Promise<Session> {
       );
       await new Promise((r) => setTimeout(r, opts.diagnosticExtraMs));
       process.stderr.write(`[teams-cli login] diagnostic window over\n`);
+    }
+
+    // Let the remaining surfaces run before the browser closes, within the
+    // login budget. Then stop the loop so it does not race context.close().
+    const navFinished = await awaitWithin(navDone, navDeadline - Date.now());
+    navStop = true;
+    if (!navFinished) {
+      process.stderr.write(
+        `[teams-cli login] navigation budget spent, closing with ${tokensByAud.size} audiences\n`,
+      );
     }
 
     process.stderr.write(
