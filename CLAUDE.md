@@ -5,7 +5,7 @@ TypeScript CLI for Microsoft Teams. Reads chats/channels via private Teams APIs 
 ## Tech Stack
 
 - TypeScript 6, compiled to CommonJS in `dist/`
-- Node.js >= 20
+- Node.js >= 22.12 (`engines` in `package.json`)
 - `commander` for CLI parsing, `playwright` for browser-based login
 - `vitest` for tests, ESLint + Prettier, SonarCloud
 
@@ -20,12 +20,12 @@ npm run cli                # dev run via ts-node (no compile)
 
 **Always rebuild after code changes before running via `node dist/cli.js`.**
 
-The binary is NOT on PATH — always invoke as `node ~/SourceCode/teams-access/dist/cli.js`.
+The binary may not be on PATH (some hosts link `teams-cli` into `~/.local/bin`). `node ~/SourceCode/teams-access/dist/cli.js` always works.
 
 ## Test / Lint
 
 ```bash
-npm test                   # vitest run (52 tests across 13 files)
+npm test                   # vitest run
 npm run test:watch
 npm run test:coverage      # v8 coverage
 npm run lint
@@ -63,7 +63,7 @@ src/
 test_scripts/               # Mirrors src/ layout, vitest tests
 scripts/pii-gauntlet.sh     # Tracked-file PII scan (pre-commit + CI gate)
 dist/                       # Compiled output
-docs/                       # private-api-cookbook.md, spike-results.md
+docs/                       # private-api-cookbook.md
 ```
 
 ## Key Conventions
@@ -92,7 +92,7 @@ docs/                       # private-api-cookbook.md, spike-results.md
 - Session tokens expire ~24h; `auth-renew` refreshes headlessly; `login` does full interactive re-auth.
 - Writing a real home-directory path (`/Users/<name>/...`) or a personal email into any tracked file will fail `pii-gauntlet.sh` in pre-commit and in CI. Use `~/` or `/Users/user/` in examples.
 
-## The three M365 CLIs
+## The four M365 CLIs
 
 One surface per repo. They share no session, no Playwright profile and no
 login, and each has its own state directory.
@@ -102,6 +102,7 @@ login, and each has its own state directory.
 | Mail, calendar, attachments | `outlook-access`    | `outlook-cli` (on PATH)                           | `~/.outlook-cli/`    |
 | Teams chats and channels    | `teams-access`      | `node ~/SourceCode/teams-access/dist/cli.js`      | `~/.teams-cli/`      |
 | SharePoint + OneDrive files | `sharepoint-access` | `node ~/SourceCode/sharepoint-access/dist/cli.js` | `~/.sharepoint-cli/` |
+| Power BI                    | `powerbi-access`    | `node ~/SourceCode/powerbi-access/dist/cli.js`    | `~/.powerbi-cli/`    |
 
-Exit codes 0-6 are identical across all three: **4 = re-authenticate**,
+Exit codes 0-6 are identical across all four: **4 = re-authenticate**,
 **5 = upstream error**. Keep it that way; cron wrappers branch on those numbers.
